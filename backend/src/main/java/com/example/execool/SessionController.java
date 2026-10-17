@@ -1,19 +1,39 @@
 package com.example.execool;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.client.RestTemplate;
 
 import java.util.List;
 import java.util.Map;
+
+import jakarta.annotation.PostConstruct;
 
 @RestController
 @RequestMapping("/api/sessions")
 public class SessionController {
 
     private final SessionWorkspaceService workspaceService;
+    private final RestTemplate restTemplate;
 
-    public SessionController(SessionWorkspaceService workspaceService) {
+    @Value("${app.agent.url}")
+    private String agentBaseUrl;
+
+    public SessionController(SessionWorkspaceService workspaceService, RestTemplate restTemplate) {
         this.workspaceService = workspaceService;
+        this.restTemplate = restTemplate;
+    }
+
+    @PostConstruct
+    public void verifyAgentConnection() {
+        try {
+            restTemplate.getForEntity(agentBaseUrl + "/ping", Void.class);
+            System.out.println("[Agent Check] Successfully connected to Go agent at: " + agentBaseUrl);
+        } catch (Exception e) {
+            System.err.println("[Agent Error] CRITICAL: Could not connect to Go agent at [" + agentBaseUrl + "]. Make sure the agent is running.");
+            System.exit(1);
+        }
     }
 
     private boolean isInvalid(String value) {
@@ -41,22 +61,36 @@ public class SessionController {
         return ResponseEntity.ok(Map.of(
                 "session_id", sessionId,
                 "status", "ready",
-                "message", "Сессия успешно инициализирована"
+                "message", "Сессия и фоновый контейнер успешно инициализированы"
         ));
     }
 
-    // Получение списка файлов проекта (для дерева файлов в UI)
+    // Получение списка файлов проекта
     @GetMapping("/{sessionId}/files")
     public ResponseEntity<?> getProjectFiles(@PathVariable String sessionId) {
+        if (!workspaceService.sessionExists(sessionId)) {
+            return ResponseEntity.status(404).body(Map.of(
+                    "error", "SESSION_EXPIRED",
+                    "message", "Сессия не найдена или истекла"
+            ));
+        }
+
         List<String> files = workspaceService.listFiles(sessionId);
         return ResponseEntity.ok(Map.of("files", files));
     }
 
-    // Получение содержимого конкретного файла (при клике в редакторе)
+    // Получение содержимого конкретного файла
     @GetMapping("/{sessionId}/file")
     public ResponseEntity<?> getFileContent(
             @PathVariable String sessionId,
             @RequestParam("path") String filePath) {
+        
+        if (!workspaceService.sessionExists(sessionId)) {
+            return ResponseEntity.status(404).body(Map.of(
+                    "error", "SESSION_EXPIRED",
+                    "message", "Сессия не найдена или истекла"
+            ));
+        }
         
         String content = workspaceService.getFileContent(sessionId, filePath);
         
@@ -70,14 +104,21 @@ public class SessionController {
         ));
     }
 
-    // 2. Сохранение файлов проекта (Автосохранение / По требованию)
-    @PutMapping("/{sessionId}/files")
+    // Сохранение файлов проекта
+    @PutMapping("/{sessionId}/file")
     public ResponseEntity<Map<String, Object>> saveFile(
             @PathVariable String sessionId,
             @RequestBody Map<String, String> request) {
         
-        String filePath = request.get("file_path");
-        String content = request.get("content");
+        if (!workspaceService.sessionExists(sessionId)) {
+            return ResponseEntity.status(404).body(Map.of(
+                    "error", "SESSION_EXPIRED",
+                    "message", "Сессия не найдена или истекла"
+            ));
+        }
+
+        String filePath = request != null ? request.get("file_path") : null;
+        String content = request != null ? request.get("content") : null;
 
         if (filePath == null || filePath.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Параметр file_path обязателен"));
@@ -92,14 +133,46 @@ public class SessionController {
         return ResponseEntity.ok(Map.of("status", "saved"));
     }
 
-    // 3. Запуск кода (Заглушка под будущий Go-агент)
+    // Удаление файлов проекта
+    @DeleteMapping("/{sessionId}/file")
+    public ResponseEntity<Map<String, Object>> deleteFile(
+            @PathVariable String sessionId,
+            @RequestParam("path") String filePath) {
+        
+        if (!workspaceService.sessionExists(sessionId)) {
+            return ResponseEntity.status(404).body(Map.of(
+                    "error", "SESSION_EXPIRED",
+                    "message", "Сессия не найдена или истекла"
+            ));
+        }
+
+        if (filePath == null || filePath.isBlank()) {
+            return ResponseEntity.badRequest().body(Map.of("error", "Параметр path обязателен"));
+        }
+
+        boolean success = workspaceService.deleteFile(sessionId, filePath);
+
+        if (!success) {
+            return ResponseEntity.status(404).body(Map.of("error", "Не удалось удалить файл (файл не найден или ошибка пути)"));
+        }
+
+        return ResponseEntity.ok(Map.of(
+                "status", "deleted",
+                "file_path", filePath
+        ));
+    }
+
+    // Запуск кода через существующий контейнер сессии
     @PostMapping("/{sessionId}/run")
     public ResponseEntity<Map<String, Object>> runCode(
             @PathVariable String sessionId,
             @RequestBody Map<String, String> request) {
         
         if (!workspaceService.sessionExists(sessionId)) {
-            return ResponseEntity.status(404).body(Map.of("error", "Сессия не найдена"));
+            return ResponseEntity.status(404).body(Map.of(
+                    "error", "SESSION_EXPIRED",
+                    "message", "Сессия не найдена или истекла"
+            ));
         }
 
         String command = request != null ? request.get("command") : null;
@@ -107,15 +180,21 @@ public class SessionController {
             return ResponseEntity.badRequest().body(Map.of("error", "Параметр command обязателен"));
         }
 
-        // TODO: Здесь в будущем будет вызов Go-агента через HTTP/gRPC
+        try {
+            String agentUrl = agentBaseUrl + "/session/" + sessionId + "/run";
+            Map<String, String> agentRequest = Map.of("command", command);
 
-        return ResponseEntity.ok(Map.of(
-                "exit_code", 0,
-                "output", "Dummy execution output for command: " + command + "\n"
-        ));
+            ResponseEntity<Map> agentResponse = restTemplate.postForEntity(agentUrl, agentRequest, Map.class);
+            return ResponseEntity.ok(agentResponse.getBody());
+
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of(
+                    "error", "Ошибка выполнения кода в агенте: " + e.getMessage()
+            ));
+        }
     }
 
-    // 4. Закрытие сессии (Удаление рабочей папки)
+    // Закрытие сессии
     @DeleteMapping("/{sessionId}")
     public ResponseEntity<Map<String, Object>> stopSession(@PathVariable String sessionId) {
         workspaceService.deleteSessionWorkspace(sessionId);

@@ -1,139 +1,130 @@
 package com.example.execool;
 
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpMethod;
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
-import java.io.IOException;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.web.util.UriComponentsBuilder;
+
 import java.util.ArrayList;
 import java.util.List;
-import java.util.UUID;
-import java.util.stream.Collectors;
-import java.util.stream.Stream;
+import java.util.Map;
 
 @Service
 public class SessionWorkspaceService {
 
-    private final Path rootSessionsDir = Paths.get(System.getProperty("java.io.tmpdir"), "execool-sessions");
+    private final RestTemplate restTemplate;
+
+    @Value("${app.agent.url}")
+    private String agentBaseUrl;
+
+    public SessionWorkspaceService(RestTemplate restTemplate) {
+        this.restTemplate = restTemplate;
+    }
+
+    private static class SessionRunResult {
+        public int exit_code;
+        public String output;
+    }
 
     public boolean sessionExists(String sessionId) {
-        Path sessionDir = rootSessionsDir.resolve(sessionId);
-        return Files.exists(sessionDir) && Files.isDirectory(sessionDir);
+        if (sessionId == null || sessionId.isBlank()) {
+            return false;
+        }
+        try {
+            String agentUrl = agentBaseUrl + "/session/" + sessionId + "/run";
+            Map<String, String> requestBody = Map.of("command", "true");
+            ResponseEntity<SessionRunResult> response = restTemplate.postForEntity(agentUrl, requestBody, SessionRunResult.class);
+            return response.getStatusCode().is2xxSuccessful() && response.getBody() != null && response.getBody().exit_code == 0;
+        } catch (Exception e) {
+            return false;
+        }
     }
 
     public String createSessionWorkspace(String projectId, String userId) {
+        String sessionId = java.util.UUID.randomUUID().toString();
+        
         try {
-            String sessionId = UUID.randomUUID().toString();
-            Path sessionDir = rootSessionsDir.resolve(sessionId);
-            Files.createDirectories(sessionDir);
-            System.out.println("[Backend VFS] Создано чистое виртуальное пространство: " + sessionId);
+            String agentUrl = agentBaseUrl + "/session/start";
+            Map<String, String> requestBody = Map.of("session_id", sessionId);
+            
+            restTemplate.postForEntity(agentUrl, requestBody, Map.class);
+            
+            System.out.println("[Backend] Запрошен запуск сессии у агента: " + sessionId);
             return sessionId;
-        } catch (IOException e) {
-            System.err.println("[Backend Error] Не удалось создать рабочее пространство: " + e.getMessage());
-            return null; // Возвращаем null вместо падения
+            
+        } catch (Exception e) {
+            System.err.println("[Backend Error] Ошибка инициализации сессии в агенте: " + e.getMessage());
+            return null;
         }
     }
 
-    /**
-     * Безопасный виртуальный резолвер. Если путь некорректный или ведет за пределы — вернет null.
-     */
-    private Path resolveVirtualPath(Path sessionDir, String filePath) {
-        if (filePath == null || filePath.isBlank()) {
-            return null;
+    public void deleteSessionWorkspace(String sessionId) {
+        try {
+            String agentUrl = agentBaseUrl + "/session/" + sessionId;
+            restTemplate.delete(agentUrl);
+            System.out.println("[Backend] Сессия полностью удалена через агента: " + sessionId);
+        } catch (Exception e) {
+            System.err.println("[Backend Error] Ошибка удаления сессии в агенте: " + e.getMessage());
         }
-
-        Path currentPath = sessionDir;
-        String cleanPath = filePath.replace('\\', '/');
-        
-        for (String segment : cleanPath.split("/")) {
-            if (segment.isEmpty() || segment.equals(".")) {
-                continue;
-            }
-            if (segment.equals("..")) {
-                return null; // Блокируем побег без исключений
-            }
-            currentPath = currentPath.resolve(segment);
-        }
-
-        Path normalizedSessionDir = sessionDir.normalize();
-        Path normalizedTarget = currentPath.normalize();
-        
-        if (!normalizedTarget.startsWith(normalizedSessionDir)) {
-            return null; // Выход за границы песочницы пресекаем
-        }
-
-        return normalizedTarget;
     }
 
     public boolean saveFile(String sessionId, String filePath, String content) {
         try {
-            Path sessionDir = rootSessionsDir.resolve(sessionId);
-            Path targetFile = resolveVirtualPath(sessionDir, filePath);
-            
-            if (targetFile == null) {
-                return false; // Ошибка пути
-            }
+            // Используем fromUriString вместо fromHttpUrl
+            String agentUrl = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/" + sessionId + "/file")
+                    .queryParam("path", filePath)
+                    .toUriString();
 
-            if (targetFile.getParent() != null) {
-                Files.createDirectories(targetFile.getParent());
-            }
-
-            Files.writeString(targetFile, content != null ? content : "");
+            restTemplate.put(agentUrl, content != null ? content : "");
             return true;
-        } catch (IOException e) {
-            System.err.println("[Backend Error] Ошибка записи файла: " + e.getMessage());
+        } catch (Exception e) {
+            System.err.println("[Backend Error] Ошибка сохранения файла: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public boolean deleteFile(String sessionId, String filePath) {
+        try {
+            String agentUrl = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/" + sessionId + "/file")
+                    .queryParam("path", filePath)
+                    .toUriString();
+
+            restTemplate.exchange(agentUrl, HttpMethod.DELETE, null, Void.class);
+            return true;
+        } catch (Exception e) {
+            System.err.println("[Backend Error] Ошибка удаления файла: " + e.getMessage());
             return false;
         }
     }
 
     public String getFileContent(String sessionId, String filePath) {
         try {
-            Path sessionDir = rootSessionsDir.resolve(sessionId);
-            Path targetFile = resolveVirtualPath(sessionDir, filePath);
-            
-            if (targetFile == null || !Files.exists(targetFile) || !Files.isRegularFile(targetFile)) {
-                return null; // Файл не найден или путь невалиден
-            }
+            String agentUrl = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/" + sessionId + "/file")
+                    .queryParam("path", filePath)
+                    .toUriString();
 
-            return Files.readString(targetFile);
-        } catch (IOException e) {
+            return restTemplate.getForObject(agentUrl, String.class);
+        } catch (Exception e) {
             System.err.println("[Backend Error] Ошибка чтения файла: " + e.getMessage());
             return null;
         }
     }
 
     public List<String> listFiles(String sessionId) {
-        Path sessionDir = rootSessionsDir.resolve(sessionId);
-        if (!Files.exists(sessionDir)) {
-            return new ArrayList<>();
-        }
-
-        try (Stream<Path> walk = Files.walk(sessionDir)) {
-            return walk.filter(Files::isRegularFile)
-                    .map(sessionDir::relativize)
-                    .map(Path::toString)
-                    .map(p -> p.replace('\\', '/'))
-                    .collect(Collectors.toList());
-        } catch (IOException e) {
-            System.err.println("[Backend Error] Ошибка обхода директории: " + e.getMessage());
-            return new ArrayList<>();
-        }
-    }
-
-    public void deleteSessionWorkspace(String sessionId) {
         try {
-            Path sessionDir = rootSessionsDir.resolve(sessionId);
-            if (Files.exists(sessionDir)) {
-                try (var walk = Files.walk(sessionDir)) {
-                    walk.sorted((a, b) -> b.compareTo(a))
-                        .forEach(path -> {
-                            try { Files.delete(path); } catch (IOException ignored) {}
-                        });
-                }
-                System.out.println("[VFS] Пространство сессии очищено: " + sessionId);
+            String agentUrl = agentBaseUrl + "/session/" + sessionId + "/files";
+            ResponseEntity<List> response = restTemplate.getForEntity(agentUrl, List.class);
+            
+            if (response.getBody() != null) {
+                @SuppressWarnings("unchecked")
+                List<String> files = (List<String>) response.getBody();
+                return files;
             }
         } catch (Exception e) {
-            System.err.println("[Backend Error] Ошибка удаления сессии: " + e.getMessage());
+            System.err.println("[Backend Error] Ошибка получения списка файлов: " + e.getMessage());
         }
+        return new ArrayList<>();
     }
 }

@@ -196,7 +196,7 @@ export default function App() {
       setOutput("Выполнение программы...");
       const result = await executeProject(
         id,
-        ".venv/bin/python main.py"
+        "python3 main.py"
       );
 
       setOutput(result.output ?? "");

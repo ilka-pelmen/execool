@@ -119,13 +119,38 @@ export function saveFile(sessionId, filePath, content) {
   }
 
   return apiRequest(
-    `/sessions/${encodeURIComponent(sessionId)}/files`,
+    `/sessions/${encodeURIComponent(sessionId)}/file`,
     {
       method: "PUT",
       body: JSON.stringify({
         file_path: filePath,
         content,
       }),
+    }
+  );
+}
+
+/**
+ * Удалить файл проекта.
+ * DELETE /api/sessions/{sessionId}/file?path=...
+ */
+export function deleteFile(sessionId, filePath) {
+  if (!sessionId) {
+    throw new Error("sessionId обязателен");
+  }
+
+  if (!filePath) {
+    throw new Error("filePath обязателен");
+  }
+
+  const query = new URLSearchParams({
+    path: filePath,
+  });
+
+  return apiRequest(
+    `/sessions/${encodeURIComponent(sessionId)}/file?${query}`,
+    {
+      method: "DELETE",
     }
   );
 }
