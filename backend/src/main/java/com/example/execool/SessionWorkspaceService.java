@@ -10,6 +10,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.net.URI;
 
 @Service
 public class SessionWorkspaceService {
@@ -72,12 +73,13 @@ public class SessionWorkspaceService {
 
     public boolean saveFile(String sessionId, String filePath, String content) {
         try {
-            // Используем fromUriString вместо fromHttpUrl
-            String agentUrl = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/" + sessionId + "/file")
-                    .queryParam("path", filePath)
-                    .toUriString();
+            URI uri = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/{id}/file")
+                .queryParam("path", "{path}")
+                .encode()
+                .buildAndExpand(sessionId, filePath)
+                .toUri();
 
-            restTemplate.put(agentUrl, content != null ? content : "");
+            restTemplate.put(uri, content != null ? content : "");
             return true;
         } catch (Exception e) {
             System.err.println("[Backend Error] Ошибка сохранения файла: " + e.getMessage());
@@ -87,11 +89,13 @@ public class SessionWorkspaceService {
 
     public boolean deleteFile(String sessionId, String filePath) {
         try {
-            String agentUrl = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/" + sessionId + "/file")
-                    .queryParam("path", filePath)
-                    .toUriString();
+            URI uri = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/{id}/file")
+                .queryParam("path", "{path}")
+                .encode()
+                .buildAndExpand(sessionId, filePath)
+                .toUri();
 
-            restTemplate.exchange(agentUrl, HttpMethod.DELETE, null, Void.class);
+            restTemplate.exchange(uri, HttpMethod.DELETE, null, Void.class);
             return true;
         } catch (Exception e) {
             System.err.println("[Backend Error] Ошибка удаления файла: " + e.getMessage());
@@ -101,11 +105,13 @@ public class SessionWorkspaceService {
 
     public String getFileContent(String sessionId, String filePath) {
         try {
-            String agentUrl = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/" + sessionId + "/file")
-                    .queryParam("path", filePath)
-                    .toUriString();
+            URI uri = UriComponentsBuilder.fromUriString(agentBaseUrl + "/session/{id}/file")
+                .queryParam("path", "{path}")
+                .encode()
+                .buildAndExpand(sessionId, filePath)
+                .toUri();
 
-            return restTemplate.getForObject(agentUrl, String.class);
+            return restTemplate.getForObject(uri, String.class);
         } catch (Exception e) {
             System.err.println("[Backend Error] Ошибка чтения файла: " + e.getMessage());
             return null;
