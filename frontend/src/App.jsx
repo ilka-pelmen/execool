@@ -22,17 +22,7 @@ const PROJECT_NAME = "myapp";
 const INITIAL_FILES = [
   {
     path: "main.py",
-    content: 'def main():\n    print("Hello from IDE!")\n\nmain()\n',
-    dirty: false,
-  },
-  {
-    path: "utils.py",
-    content: 'def greet(name):\n    return f"Hello, {name}!"\n',
-    dirty: false,
-  },
-  {
-    path: "requirements.txt",
-    content: "",
+    content: 'def main():\n    print("Hello from Execool!")\n\nmain()\n',
     dirty: false,
   },
 ];
