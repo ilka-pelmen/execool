@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"syscall"
@@ -36,18 +37,13 @@ type SessionRunResult struct {
 	Output   string `json:"output"`
 }
 
+var sessionIDRe = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
+
 func (self *SessionRunner) sanitizeSessionPath(sessionId string) (string, error) {
-	if sessionId == "" {
-		return "", fmt.Errorf("Session ID is empty")
+	if !sessionIDRe.MatchString(sessionId) {
+		return "", fmt.Errorf("invalid session id")
 	}
-
-	sessionDir := filepath.Clean(filepath.Join(self.Conf.BaseSessionsDir, sessionId))
-
-	if !strings.HasPrefix(sessionDir, self.Conf.BaseSessionsDir+string(filepath.Separator)) {
-		return "", fmt.Errorf("Insecure path, access denied")
-	}
-
-	return sessionDir, nil
+	return filepath.Join(self.Conf.BaseSessionsDir, sessionId), nil
 }
 
 func (self *SessionRunner) openSessionRoot(sessionId string) (*os.Root, error) {
@@ -110,7 +106,11 @@ func (self *SessionRunner) StartEndpoint(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if err := os.MkdirAll(sessionDir, 0700); err != nil {
+	if err := os.Mkdir(sessionDir, 0700); err != nil {
+		if errors.Is(err, fs.ErrExist) {
+			http.Error(w, "Session already exists", http.StatusConflict)
+			return
+		}
 		http.Error(w, "Could not create workspace", http.StatusInternalServerError)
 		return
 	}
@@ -129,6 +129,7 @@ func (self *SessionRunner) StartEndpoint(w http.ResponseWriter, r *http.Request)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		log.Printf("[Podman Error] session: %s, err: %v, output: %s\n", req.SessionID, err, string(output))
+		os.RemoveAll(sessionDir)
 		http.Error(w, "Could not start a session: "+req.SessionID, http.StatusInternalServerError)
 		return
 	}
@@ -142,7 +143,7 @@ const execGrace = 5 * time.Second // запас: timeout в контейнере
 func (self *SessionRunner) ExecEndpoint(w http.ResponseWriter, r *http.Request) {
 	sessionId := r.PathValue("sessionId")
 	var req SessionRun
-	if err := json.NewDecoder(r.Body).Decode(&req); sessionId == "" || err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&req); !sessionIDRe.MatchString(sessionId) || err != nil {
 		http.Error(w, "Bad Request", http.StatusBadRequest)
 		return
 	}
@@ -232,8 +233,13 @@ func (self *SessionRunner) PutFileEndpoint(w http.ResponseWriter, r *http.Reques
 	}
 	defer root.Close()
 
-	content, err := io.ReadAll(r.Body)
+	content, err := io.ReadAll(http.MaxBytesReader(w, r.Body, self.Conf.MaxUpload))
 	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, "File too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "Could not read request body", http.StatusBadRequest)
 		return
 	}
@@ -318,15 +324,9 @@ func (self *SessionRunner) GetFileEndpoint(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	content, err := io.ReadAll(f)
-	if err != nil {
-		http.Error(w, "Could not read file", http.StatusInternalServerError)
-		return
-	}
-
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	w.Write(content)
+	io.Copy(w, f)
 }
 
 // GET /session/{sessionId}/files

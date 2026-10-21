@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +14,17 @@ import (
 func main() {
 	cfg := LoadConfig()
 	runner := SessionRunner{Conf: cfg}
+
+	runner.RemoveAllContainers()
+	if err := os.RemoveAll(cfg.BaseSessionsDir); err != nil {
+		log.Printf("[Agent] cleanup: %v", err)
+	}
+	if err := os.MkdirAll(cfg.BaseSessionsDir, 0700); err != nil {
+		log.Fatalf("[Agent] cannot create sessions dir: %v", err)
+	}
+	if err := runner.InitializeBaseImage(); err != nil {
+		log.Fatalf("[Agent] %v", err)
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
@@ -27,6 +39,8 @@ func main() {
 	mux.HandleFunc("GET /session/{sessionId}/file", runner.GetFileEndpoint)
 	mux.HandleFunc("GET /session/{sessionId}/files", runner.ListFilesEndpoint)
 
+	mux.HandleFunc("POST /lint", LintEndpoint)
+
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
 
@@ -39,7 +53,7 @@ func main() {
 	go func() {
 		log.Printf("[Agent] Starting on http://localhost%s...\n", addr)
 
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("[Agent Critical] Server failed: %v\n", err)
 		}
 	}()
@@ -47,13 +61,16 @@ func main() {
 	sig := <-sigChan
 	log.Printf("[Agent] Got signal %v. Shutting down...\n", sig)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	_ = server.Shutdown(ctx)
+	if err := server.Shutdown(ctx); err != nil {
+		_ = server.Close() // время вышло: рвём оставшиеся соединения
+	}
 
-	err := os.RemoveAll(cfg.BaseSessionsDir)
-	if err != nil {
-		log.Fatalf("[Agent Critical] Error deleting the runtime directory %s: %v\n", cfg.BaseSessionsDir, err)
+	runner.RemoveAllContainers()
+
+	if err := os.RemoveAll(cfg.BaseSessionsDir); err != nil {
+		log.Printf("[Agent Critical] Error deleting the runtime directory %s: %v\n", cfg.BaseSessionsDir, err)
 	} else {
 		log.Printf("[Agent] Runtime directory %s removed.\n", cfg.BaseSessionsDir)
 	}

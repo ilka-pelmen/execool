@@ -1,0 +1,46 @@
+services:
+  agent:
+    build: ./agent
+    devices:
+      - /dev/fuse
+    security_opt:
+      - label=disable
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 1024
+    volumes:
+      - agent-containers:/home/podman/.local/share/containers
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "bash -c 'exec 3<>/dev/tcp/127.0.0.1/6721 && printf \"GET /ping HTTP/1.0\\r\\n\\r\\n\" >&3 && head -n1 <&3 | grep -q 200'"
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 120s
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6721:6721"
+
+  backend:
+    build: ./backend
+    environment:
+      AGENT_URL: http://agent:6721
+      CORS_ALLOWED_ORIGINS: "http://localhost:8080"
+    depends_on:
+      agent:
+        condition: service_healthy
+    restart: unless-stopped
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+volumes:
+  agent-containers:

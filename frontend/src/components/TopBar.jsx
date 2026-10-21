@@ -1,34 +1,45 @@
+const STATUS_LABELS = {
+  ready: "Онлайн",
+  starting: "Подключение…",
+  closing: "Отключение…",
+  error: "Ошибка",
+};
 
 export default function TopBar({
   projectName,
   status,
   sessionReady,
   running,
+  canExport,
   onOpen,
   onRun,
+  onExport,
 }) {
   return (
     <header className="topbar">
       <div className="brand">
         <span className="brand-mark">&lt;/&gt;</span>
-        <span>{projectName}</span>
+        <span>Execool</span>
       </div>
 
       <div className="topbar-right">
         <span className={`status status-${status}`}>
           <span className="status-dot" />
-          {status === "ready"
-            ? "Онлайн"
-            : status === "starting"
-              ? "Подключение..."
-              : status === "error"
-                ? "Ошибка"
-                : "Не подключено"}
+          {STATUS_LABELS[status] ?? "Не подключено"}
         </span>
+
+        <button
+          className="button"
+          onClick={onExport}
+          disabled={!canExport}
+          title={`Скачать ${projectName}.zip`}
+        >
+          Экспорт
+        </button>
 
         {!sessionReady && (
           <button
-            className="button button-secondary"
+            className="button"
             onClick={onOpen}
             disabled={status === "starting"}
           >
@@ -41,7 +52,7 @@ export default function TopBar({
           onClick={onRun}
           disabled={!sessionReady || running}
         >
-          {running ? "Запуск..." : "▶️ Run"}
+          {running ? "Запуск…" : "Запустить"}
         </button>
       </div>
     </header>

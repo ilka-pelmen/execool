@@ -31,8 +31,7 @@ public class SessionController {
             restTemplate.getForEntity(agentBaseUrl + "/ping", Void.class);
             System.out.println("[Agent Check] Successfully connected to Go agent at: " + agentBaseUrl);
         } catch (Exception e) {
-            System.err.println("[Agent Error] CRITICAL: Could not connect to Go agent at [" + agentBaseUrl + "]. Make sure the agent is running.");
-            System.exit(1);
+            System.err.println("[Agent Warning] Go agent at [" + agentBaseUrl + "] is not reachable yet. Requests will fail until it is up.");
         }
     }
 
@@ -68,13 +67,6 @@ public class SessionController {
     // Получение списка файлов проекта
     @GetMapping("/{sessionId}/files")
     public ResponseEntity<?> getProjectFiles(@PathVariable String sessionId) {
-        if (!workspaceService.sessionExists(sessionId)) {
-            return ResponseEntity.status(404).body(Map.of(
-                    "error", "SESSION_EXPIRED",
-                    "message", "Сессия не найдена или истекла"
-            ));
-        }
-
         List<String> files = workspaceService.listFiles(sessionId);
         return ResponseEntity.ok(Map.of("files", files));
     }
@@ -84,14 +76,6 @@ public class SessionController {
     public ResponseEntity<?> getFileContent(
             @PathVariable String sessionId,
             @RequestParam("path") String filePath) {
-        
-        if (!workspaceService.sessionExists(sessionId)) {
-            return ResponseEntity.status(404).body(Map.of(
-                    "error", "SESSION_EXPIRED",
-                    "message", "Сессия не найдена или истекла"
-            ));
-        }
-        
         String content = workspaceService.getFileContent(sessionId, filePath);
         
         if (content == null) {
@@ -109,14 +93,6 @@ public class SessionController {
     public ResponseEntity<Map<String, Object>> saveFile(
             @PathVariable String sessionId,
             @RequestBody Map<String, String> request) {
-        
-        if (!workspaceService.sessionExists(sessionId)) {
-            return ResponseEntity.status(404).body(Map.of(
-                    "error", "SESSION_EXPIRED",
-                    "message", "Сессия не найдена или истекла"
-            ));
-        }
-
         String filePath = request != null ? request.get("file_path") : null;
         String content = request != null ? request.get("content") : null;
 
@@ -138,14 +114,6 @@ public class SessionController {
     public ResponseEntity<Map<String, Object>> deleteFile(
             @PathVariable String sessionId,
             @RequestParam("path") String filePath) {
-        
-        if (!workspaceService.sessionExists(sessionId)) {
-            return ResponseEntity.status(404).body(Map.of(
-                    "error", "SESSION_EXPIRED",
-                    "message", "Сессия не найдена или истекла"
-            ));
-        }
-
         if (filePath == null || filePath.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("error", "Параметр path обязателен"));
         }

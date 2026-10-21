@@ -1,7 +1,7 @@
-
 import {
   startSession,
   saveFile,
+  deleteFile,
   runCode,
   stopSession,
 } from "./api.js";
@@ -22,6 +22,11 @@ export async function persistFile(sessionId, filePath, content) {
   }
 
   return saveFile(sessionId, filePath, content);
+}
+
+export async function removeFile(sessionId, filePath) {
+  if (!sessionId) return;
+  return deleteFile(sessionId, filePath);
 }
 
 export async function executeProject(sessionId, command) {
