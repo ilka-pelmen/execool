@@ -4,308 +4,245 @@ import TopBar from "./components/TopBar.jsx";
 import FileExplorer from "./components/FileExplorer.jsx";
 import CodeEditor from "./components/CodeEditor.jsx";
 import Terminal from "./components/Terminal.jsx";
+import StartScreen from "./components/StartScreen.jsx";
 
+import { PyodideEngine } from "./engines/PyodideEngine.js";
 import {
-  createProjectSession,
-  persistFile,
-  removeFile,
-  executeProject,
-  terminateSession,
-} from "./services/session.js";
-
-import { scheduleSave, cancelScheduledSave } from "./services/autosave.js";
+  PROJECT_TYPES,
+  createProject,
+  getProjectType,
+} from "./projects/types.js";
+import { loadProject, saveProject } from "./services/storage.js";
 import { validatePath, pickRunTarget } from "./services/files.js";
 import { createZip, downloadBlob } from "./services/export_zip.js";
 
-const PROJECT_NAME = "myapp";
+import "./styles-start.css";
 
-const INITIAL_FILES = [
-  {
-    path: "main.py",
-    content: 'def main():\n    print("Hello from Execool!")\n\nmain()\n',
-    dirty: false,
-  },
-];
+const RUN_TIMEOUT_MS = 30_000;
+const MAX_LINES = 2000; // сколько строк вывода держим на экране
 
 export default function App() {
-  const [files, setFiles] = useState(INITIAL_FILES);
-  const [activeFile, setActiveFile] = useState("main.py");
+  const [project, setProject] = useState(null);
+  const [saved, setSaved] = useState(() => loadProject());
+  const [activeFile, setActiveFile] = useState(null);
 
-  const [sessionId, setSessionId] = useState(null);
-  const [status, setStatus] = useState("idle");
-  const [running, setRunning] = useState(false);
-
-  const [output, setOutput] = useState("Открой проект, чтобы начать.");
+  const [lines, setLines] = useState([]);
   const [exitCode, setExitCode] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [runtimeStatus, setRuntimeStatus] = useState("idle");
   const [saveStatus, setSaveStatus] = useState("saved");
 
-  const timersRef = useRef(new Map());
-  const filesRef = useRef(files);
-  const sessionIdRef = useRef(sessionId);
-  const saveQueueRef = useRef(Promise.resolve());
-  const runningRef = useRef(false);
+  const projectRef = useRef(project);
+  const engineRef = useRef(null);
+  const bufferRef = useRef([]);
+  const flushRef = useRef(null);
 
-  // Синхронизируем актуальные значения для асинхронных обработчиков.
-  filesRef.current = files;
-  sessionIdRef.current = sessionId;
-  runningRef.current = running;
+  projectRef.current = project;
 
+  const files = project?.files ?? [];
   const activeFileData =
     files.find((file) => file.path === activeFile) ?? files[0] ?? null;
+  const projectType = project ? getProjectType(project.type) : null;
 
+  // Вывод копится и выводится на экран не чаще раза в 50 мс.
+  function flushOutput() {
+    clearTimeout(flushRef.current);
+    flushRef.current = null;
+
+    const chunk = bufferRef.current;
+    if (chunk.length === 0) return;
+    bufferRef.current = [];
+
+    setLines((current) => {
+      const next = current.concat(chunk);
+      return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
+    });
+  }
+
+  function appendOutput(stream, text) {
+    bufferRef.current.push({ stream, text });
+    if (!flushRef.current) {
+      flushRef.current = setTimeout(flushOutput, 50);
+    }
+  }
+
+  function clearOutput() {
+    clearTimeout(flushRef.current);
+    flushRef.current = null;
+    bufferRef.current = [];
+    setLines([]);
+    setExitCode(null);
+  }
+
+  function getEngine() {
+    if (!engineRef.current) {
+      engineRef.current = new PyodideEngine({
+        onOutput: appendOutput,
+        onStatus: setRuntimeStatus,
+      });
+    }
+    return engineRef.current;
+  }
+
+  // Автосохранение проекта в браузере.
   useEffect(() => {
-    return () => {
-      for (const timer of timersRef.current.values()) {
-        cancelScheduledSave(timer);
-      }
-    };
-  }, []);
+    if (!project) return;
 
-  // Закрываем сессию при закрытии вкладки, чтобы контейнеры не копились.
+    setSaveStatus("unsaved");
+    const timer = setTimeout(() => {
+      setSaveStatus(saveProject(project) ? "saved" : "error");
+    }, 400);
+
+    return () => clearTimeout(timer);
+  }, [project]);
+
   useEffect(() => {
     const onHide = () => {
-      const id = sessionIdRef.current;
-      if (id) terminateSession(id).catch(() => {});
+      if (projectRef.current) saveProject(projectRef.current);
     };
     window.addEventListener("pagehide", onHide);
     return () => window.removeEventListener("pagehide", onHide);
   }, []);
 
-  function scheduleFileSave(path) {
-    cancelScheduledSave(timersRef.current.get(path));
+  function openProject(next) {
+    const type = getProjectType(next.type);
+    const entry =
+      type && next.files.some((file) => file.path === type.entry)
+        ? type.entry
+        : next.files[0]?.path ?? null;
 
-    const timer = scheduleSave(() => {
-      timersRef.current.delete(path);
-      void saveOneFile(path).catch(() => {});
-    });
+    clearOutput();
+    setProject(next);
+    setActiveFile(entry);
+    getEngine().preload();
+  }
 
-    timersRef.current.set(path, timer);
+  function handleSelectType(typeId) {
+    if (
+      saved &&
+      !window.confirm("Новый проект заменит сохранённый в этом браузере. Продолжить?")
+    ) {
+      return;
+    }
+    openProject(createProject(typeId));
+  }
+
+  function handleContinue() {
+    if (saved) openProject(saved);
+  }
+
+  function handleCloseProject() {
+    if (running) getEngine().stop();
+    if (projectRef.current) saveProject(projectRef.current);
+
+    setSaved(loadProject());
+    setProject(null);
+    setActiveFile(null);
+    clearOutput();
   }
 
   function updateFile(path, content) {
-    setFiles((current) =>
-      current.map((file) =>
-        file.path === path ? { ...file, content, dirty: true } : file
-      )
-    );
-
-    setSaveStatus("unsaved");
-    scheduleFileSave(path);
-  }
-
-  function saveOneFile(path) {
-    const id = sessionIdRef.current;
-
-    if (!id) {
-      return Promise.reject(new Error("Сессия не открыта"));
-    }
-
-    const currentFile = filesRef.current.find((file) => file.path === path);
-
-    if (!currentFile) {
-      return Promise.resolve();
-    }
-
-    const content = currentFile.content;
-
-    // Запросы к агенту выполняются последовательно.
-    const task = saveQueueRef.current
-      .catch(() => {})
-      .then(() => persistFile(id, path, content));
-
-    saveQueueRef.current = task;
-
-    setSaveStatus("saving");
-
-    return task
-      .then(() => {
-        setFiles((current) =>
-          current.map((file) =>
-            file.path === path && file.content === content
-              ? { ...file, dirty: false }
-              : file
-          )
-        );
-
-        // Последнее сохранение в очереди и нет отложенных: всё записано.
-        if (saveQueueRef.current === task && timersRef.current.size === 0) {
-          setSaveStatus("saved");
-        }
-      })
-      .catch((error) => {
-        setSaveStatus("error");
-        setOutput(`Ошибка сохранения ${path}: ${error.message}`);
-        throw error;
-      });
-  }
-
-  async function saveAllFiles() {
-    for (const timer of timersRef.current.values()) {
-      cancelScheduledSave(timer);
-    }
-
-    timersRef.current.clear();
-
-    for (const file of filesRef.current) {
-      await saveOneFile(file.path);
-    }
-
-    await saveQueueRef.current;
-    setSaveStatus("saved");
+    setProject((current) => ({
+      ...current,
+      files: current.files.map((file) =>
+        file.path === path ? { ...file, content } : file
+      ),
+    }));
   }
 
   function handleCreateFile(rawPath) {
     const result = validatePath(
       rawPath,
-      filesRef.current.map((file) => file.path)
+      projectRef.current.files.map((file) => file.path)
     );
 
     if (result.error) {
       return { error: result.error };
     }
 
-    const path = result.path;
-    const hasSession = Boolean(sessionIdRef.current);
-
-    setFiles((current) => [
+    setProject((current) => ({
       ...current,
-      { path, content: "", dirty: hasSession },
-    ]);
-    setActiveFile(path);
-
-    // Без сессии файл уйдёт на агент при запуске.
-    if (hasSession) {
-      setSaveStatus("unsaved");
-      scheduleFileSave(path);
-    }
-
+      files: [...current.files, { path: result.path, content: "" }],
+    }));
+    setActiveFile(result.path);
     return {};
   }
 
   function handleDeleteFile(path) {
-    cancelScheduledSave(timersRef.current.get(path));
-    timersRef.current.delete(path);
+    const remaining = projectRef.current.files.filter((file) => file.path !== path);
 
-    const remaining = filesRef.current.filter((file) => file.path !== path);
-    setFiles(remaining);
-    filesRef.current = remaining;
-
+    setProject((current) => ({ ...current, files: remaining }));
     if (activeFile === path) {
       setActiveFile(remaining[0]?.path ?? null);
     }
-
-    const id = sessionIdRef.current;
-    if (!id) return;
-
-    // Удаление идёт в той же очереди, что и сохранения: порядок сохраняется.
-    const task = saveQueueRef.current
-      .catch(() => {})
-      .then(() => removeFile(id, path));
-
-    saveQueueRef.current = task;
-
-    task.catch((error) => {
-      setOutput(`Не удалось удалить ${path} в сессии: ${error.message}`);
-    });
   }
 
   function handleExport() {
-    if (filesRef.current.length === 0) return;
-    downloadBlob(createZip(filesRef.current), `${PROJECT_NAME}.zip`);
-  }
-
-  async function handleOpenProject() {
-    if (status === "starting" || sessionIdRef.current) {
-      return;
-    }
-
-    setStatus("starting");
-    setOutput("Создание сессии…");
-
-    try {
-      // Демонстрационные идентификаторы.
-      // Позже заменим их данными реального проекта и авторизации.
-      const result = await createProjectSession("proj-999", "user-123");
-
-      setSessionId(result.session_id);
-      sessionIdRef.current = result.session_id;
-      setStatus("ready");
-      setOutput(result.message || "Сессия успешно создана.");
-    } catch (error) {
-      setStatus("error");
-      setOutput(`Не удалось открыть проект: ${error.message}`);
-    }
+    const current = projectRef.current;
+    if (!current || current.files.length === 0) return;
+    downloadBlob(createZip(current.files), `${current.name}.zip`);
   }
 
   async function handleRun() {
-    const id = sessionIdRef.current;
+    const current = projectRef.current;
+    if (!current || running) return;
 
-    if (!id || runningRef.current) {
-      return;
-    }
+    clearOutput();
 
-    const target = pickRunTarget(filesRef.current, activeFileData?.path);
-
+    const target = pickRunTarget(current.files, activeFileData?.path);
     if (!target) {
-      setOutput("Нечего запускать. Создай main.py или открой любой .py-файл.");
+      appendOutput("stderr", "Нечего запускать. Создай main.py или открой любой .py-файл.");
       return;
     }
 
     setRunning(true);
-    runningRef.current = true;
-    setExitCode(null);
-    setOutput("Сохранение файлов перед запуском…");
+    const result = await getEngine().run(current.files, target, {
+      timeoutMs: RUN_TIMEOUT_MS,
+    });
 
-    try {
-      await saveAllFiles();
-
-      setOutput("Выполнение программы…");
-      const result = await executeProject(id, `python3 '${target}'`);
-
-      setOutput(result.output ?? "");
-      setExitCode(result.exit_code ?? null);
-    } catch (error) {
-      setOutput(`Ошибка: ${error.message}`);
-    } finally {
-      setRunning(false);
-      runningRef.current = false;
+    if (result.reason === "timeout") {
+      appendOutput("stderr", `Выполнение прервано: превышено ${RUN_TIMEOUT_MS / 1000} с.`);
+    } else if (result.reason === "output-limit") {
+      appendOutput("stderr", "Выполнение прервано: слишком большой вывод.");
+    } else if (result.reason === "stopped") {
+      appendOutput("stderr", "Выполнение остановлено.");
+    } else {
+      if (result.error) appendOutput("stderr", result.error);
+      setExitCode(result.exitCode);
     }
+
+    // Весь вывод показываем сразу, до кода выхода.
+    flushOutput();
+    setRunning(false);
   }
 
-  async function handleCloseProject() {
-    const id = sessionIdRef.current;
-    if (!id) return;
-
-    setStatus("closing");
-
-    try {
-      await terminateSession(id);
-      setSessionId(null);
-      sessionIdRef.current = null;
-      setStatus("idle");
-      setOutput("Сессия завершена.");
-    } catch (error) {
-      setStatus("error");
-      setOutput(`Ошибка завершения сессии: ${error.message}`);
-    }
+  if (!project) {
+    return (
+      <StartScreen
+        types={PROJECT_TYPES}
+        saved={saved}
+        onSelect={handleSelectType}
+        onContinue={handleContinue}
+      />
+    );
   }
 
   return (
     <main className="ide">
       <TopBar
-        projectName={PROJECT_NAME}
-        status={status}
-        sessionReady={Boolean(sessionId)}
+        projectName={project.name}
+        typeName={projectType?.name ?? project.type}
+        runtimeStatus={runtimeStatus}
         running={running}
         canExport={files.length > 0}
-        onOpen={handleOpenProject}
         onRun={handleRun}
+        onStop={() => getEngine().stop()}
         onExport={handleExport}
       />
 
       <section className="workspace">
         <FileExplorer
-          projectName={PROJECT_NAME}
+          projectName={project.name}
           files={files}
           activeFile={activeFileData?.path ?? null}
           onSelect={setActiveFile}
@@ -318,7 +255,6 @@ export default function App() {
             filePath={activeFileData.path}
             value={activeFileData.content}
             onChange={(value) => updateFile(activeFileData.path, value)}
-            readOnly={!sessionId}
           />
         ) : (
           <div className="editor-panel editor-empty">
@@ -329,7 +265,7 @@ export default function App() {
       </section>
 
       <Terminal
-        output={output}
+        lines={lines}
         exitCode={exitCode}
         running={running}
         saveStatus={saveStatus}
@@ -337,17 +273,11 @@ export default function App() {
 
       <footer className="statusbar">
         <span>{activeFileData?.path ?? "Нет открытого файла"}</span>
-        <span>{sessionId ? "Сессия активна" : "Нет сессии"}</span>
+        <span>{projectType?.name ?? project.type}</span>
 
-        {sessionId && (
-          <button
-            className="close-session"
-            onClick={handleCloseProject}
-            disabled={running}
-          >
-            Закрыть сессию
-          </button>
-        )}
+        <button className="close-session" onClick={handleCloseProject}>
+          Закрыть проект
+        </button>
       </footer>
     </main>
   );

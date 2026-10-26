@@ -1,18 +1,19 @@
 const STATUS_LABELS = {
-  ready: "Онлайн",
-  starting: "Подключение…",
-  closing: "Отключение…",
-  error: "Ошибка",
+  idle: "Python не загружен",
+  loading: "Загрузка Python…",
+  ready: "Python готов",
+  running: "Выполняется…",
+  error: "Ошибка загрузки Python",
 };
 
 export default function TopBar({
   projectName,
-  status,
-  sessionReady,
+  typeName,
+  runtimeStatus,
   running,
   canExport,
-  onOpen,
   onRun,
+  onStop,
   onExport,
 }) {
   return (
@@ -20,40 +21,30 @@ export default function TopBar({
       <div className="brand">
         <span className="brand-mark">&lt;/&gt;</span>
         <span>Execool</span>
+        <span className="brand-project">
+          {projectName} · {typeName}
+        </span>
       </div>
 
       <div className="topbar-right">
-        <span className={`status status-${status}`}>
+        <span className={`status status-${runtimeStatus}`}>
           <span className="status-dot" />
-          {STATUS_LABELS[status] ?? "Не подключено"}
+          {STATUS_LABELS[runtimeStatus] ?? ""}
         </span>
 
-        <button
-          className="button"
-          onClick={onExport}
-          disabled={!canExport}
-          title={`Скачать ${projectName}.zip`}
-        >
+        <button className="button" onClick={onExport} disabled={!canExport}>
           Экспорт
         </button>
 
-        {!sessionReady && (
-          <button
-            className="button"
-            onClick={onOpen}
-            disabled={status === "starting"}
-          >
-            Открыть проект
+        {running ? (
+          <button className="button" onClick={onStop}>
+            Остановить
+          </button>
+        ) : (
+          <button className="button button-run" onClick={onRun}>
+            Запустить
           </button>
         )}
-
-        <button
-          className="button button-run"
-          onClick={onRun}
-          disabled={!sessionReady || running}
-        >
-          {running ? "Запуск…" : "Запустить"}
-        </button>
       </div>
     </header>
   );
