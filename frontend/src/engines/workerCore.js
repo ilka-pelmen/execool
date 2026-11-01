@@ -1,37 +1,41 @@
-// Логика воркера без привязки к браузеру: загрузчик Pyodide и канал сообщений приходят снаружи.
+// Общее ядро воркера для любого рантайма (Pyodide, wasm-программы на C++ и т. д.).
+// Рантайм подключается адаптером:
+//   adapter.name                  имя для сообщений об ошибках ("Python", "C++")
+//   adapter.load(io)              загружает рантайм, подключает вывод к io.stdout / io.stderr,
+//                                 возвращает экземпляр рантайма
+//   adapter.run(instance, job)    выполняет проект job = { entry, files }, возвращает код выхода
+//                                 (можно вернуть значение или промис)
 
 function errorText(error) {
   return error?.message ?? String(error);
 }
 
-export function createWorkerCore({ loadPyodide, runnerSource, post }) {
-  let pyodidePromise = null;
+export function createWorkerCore({ adapter, post }) {
+  let instancePromise = null;
+
+  const io = {
+    stdout: (text) => post({ type: "output", stream: "stdout", text }),
+    stderr: (text) => post({ type: "output", stream: "stderr", text }),
+  };
 
   function init() {
-    if (!pyodidePromise) {
+    if (!instancePromise) {
       post({ type: "status", status: "loading" });
 
-      pyodidePromise = (async () => {
-        const pyodide = await loadPyodide();
-
-        pyodide.setStdout({
-          batched: (text) => post({ type: "output", stream: "stdout", text }),
+      instancePromise = Promise.resolve()
+        .then(() => adapter.load(io))
+        .then((instance) => {
+          post({ type: "status", status: "ready" });
+          return instance;
+        })
+        .catch((error) => {
+          instancePromise = null; // следующая попытка загрузит заново
+          post({ type: "status", status: "error" });
+          throw error;
         });
-        pyodide.setStderr({
-          batched: (text) => post({ type: "output", stream: "stderr", text }),
-        });
-
-        pyodide.runPython(runnerSource);
-        post({ type: "status", status: "ready" });
-        return pyodide;
-      })().catch((error) => {
-        pyodidePromise = null; // следующая попытка загрузит заново
-        post({ type: "status", status: "error" });
-        throw error;
-      });
     }
 
-    return pyodidePromise;
+    return instancePromise;
   }
 
   async function handle(message) {
@@ -39,7 +43,10 @@ export function createWorkerCore({ loadPyodide, runnerSource, post }) {
       try {
         await init();
       } catch (error) {
-        post({ type: "fatal", message: `Не удалось загрузить Python: ${errorText(error)}` });
+        post({
+          type: "fatal",
+          message: `Не удалось загрузить ${adapter.name}: ${errorText(error)}`,
+        });
       }
       return;
     }
@@ -47,16 +54,13 @@ export function createWorkerCore({ loadPyodide, runnerSource, post }) {
     if (message.type !== "run") return;
 
     try {
-      const pyodide = await init();
+      const instance = await init();
       post({ type: "status", status: "running" });
 
-      const runner = pyodide.globals.get("execool_run");
-      let exitCode;
-      try {
-        exitCode = runner(message.entry, JSON.stringify(message.files));
-      } finally {
-        runner.destroy?.();
-      }
+      const exitCode = await adapter.run(instance, {
+        entry: message.entry,
+        files: message.files,
+      });
 
       post({ type: "result", id: message.id, exitCode });
       post({ type: "status", status: "ready" });

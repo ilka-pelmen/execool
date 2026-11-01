@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -13,67 +14,63 @@ import (
 
 func main() {
 	cfg := LoadConfig()
-	runner := SessionRunner{Conf: cfg}
 
-	runner.RemoveAllContainers()
-	if err := os.RemoveAll(cfg.BaseSessionsDir); err != nil {
-		log.Printf("[Agent] cleanup: %v", err)
-	}
-	if err := os.MkdirAll(cfg.BaseSessionsDir, 0700); err != nil {
-		log.Fatalf("[Agent] cannot create sessions dir: %v", err)
-	}
-	if err := runner.InitializeBaseImage(); err != nil {
-		log.Fatalf("[Agent] %v", err)
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	manager := NewSessionManager(&cfg)
+	if err := manager.Start(); err != nil {
+		log.Fatalf("[Agent] cannot prepare workspace %s: %v", cfg.WorkspaceRoot, err)
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /ping", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	mux.HandleFunc("POST /session/start", runner.StartEndpoint)
-	mux.HandleFunc("POST /session/{sessionId}/run", runner.ExecEndpoint)
-	mux.HandleFunc("DELETE /session/{sessionId}", runner.DeleteEndpoint)
+	lsp := NewLSPHost(ctx, &cfg)
+	handler := NewWebHandler(&cfg, manager, lsp)
 
-	mux.HandleFunc("PUT /session/{sessionId}/file", runner.PutFileEndpoint)
-	mux.HandleFunc("DELETE /session/{sessionId}/file", runner.DeleteFileEndpoint)
-	mux.HandleFunc("GET /session/{sessionId}/file", runner.GetFileEndpoint)
-	mux.HandleFunc("GET /session/{sessionId}/files", runner.ListFilesEndpoint)
+	go manager.RunReaper(ctx)
 
-	mux.HandleFunc("POST /lint", LintEndpoint)
-
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
-
-	addr := ":" + cfg.AgentPort
-	server := &http.Server{
-		Addr:    addr,
-		Handler: mux,
+	public := &http.Server{
+		Addr:              ":" + cfg.AgentPort,
+		Handler:           handler.PublicRoutes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
+	}
+	internal := &http.Server{
+		Addr:              cfg.InternalAddr,
+		Handler:           handler.InternalRoutes(),
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
-	go func() {
-		log.Printf("[Agent] Starting on http://localhost%s...\n", addr)
+	errCh := make(chan error, 2)
+	serve := func(name string, server *http.Server) {
+		go func() {
+			log.Printf("[Agent] %s API on %s", name, server.Addr)
+			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				errCh <- fmt.Errorf("%s server failed: %w", name, err)
+			}
+		}()
+	}
+	serve("public", public)
+	serve("internal", internal)
 
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("[Agent Critical] Server failed: %v\n", err)
-		}
-	}()
+	select {
+	case <-ctx.Done():
+		log.Println("[Agent] Shutting down...")
+	case err := <-errCh:
+		log.Printf("[Agent] %v", err)
+	}
 
-	sig := <-sigChan
-	log.Printf("[Agent] Got signal %v. Shutting down...\n", sig)
+	stop() // отменяет контекст: подключения языкового сервера закрываются
 
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil {
-		_ = server.Close() // время вышло: рвём оставшиеся соединения
+	for _, server := range []*http.Server{public, internal} {
+		if err := server.Shutdown(shutdownCtx); err != nil {
+			_ = server.Close()
+		}
 	}
 
-	runner.RemoveAllContainers()
-
-	if err := os.RemoveAll(cfg.BaseSessionsDir); err != nil {
-		log.Printf("[Agent Critical] Error deleting the runtime directory %s: %v\n", cfg.BaseSessionsDir, err)
-	} else {
-		log.Printf("[Agent] Runtime directory %s removed.\n", cfg.BaseSessionsDir)
-	}
-
+	lsp.Wait(5 * time.Second)
+	manager.Shutdown()
 	log.Println("[Agent] Goodbye.")
 }
