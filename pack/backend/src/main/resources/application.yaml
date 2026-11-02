@@ -1,0 +1,10 @@
+app:
+  agent:
+    internal-url: ${AGENT_INTERNAL_URL:http://localhost:6722}
+    public-url: ${AGENT_PUBLIC_URL:http://localhost:6721}
+    api-key: ${AGENT_API_KEY}
+    token-secret: ${AGENT_TOKEN_SECRET}
+    id: ${AGENT_ID}
+
+  cors:
+    allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000,http://localhost:5173}

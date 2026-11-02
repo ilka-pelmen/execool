@@ -202,13 +202,28 @@ func (h *LSPHost) Serve(w http.ResponseWriter, r *http.Request, session *Session
 		cancel(nil)
 	}()
 
-	// Подключение без сообщений закрывается по таймеру простоя.
-	idle := time.AfterFunc(h.conf.LSPIdle, func() { cancel(errIdle) })
-	defer idle.Stop()
-	touch := func() {
-		idle.Reset(h.conf.LSPIdle)
-		session.Touch()
-	}
+	// Подключение закрывается, если у сессии не было активности дольше LSPIdle.
+	// Активность - это и сообщения LSP, и любой запрос с токеном (например, heartbeat
+	// браузера: GET /sessions/{id}), потому что и то и другое отмечается в session.Touch.
+	go func() {
+		timer := time.NewTimer(h.conf.LSPIdle)
+		defer timer.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-timer.C:
+				remaining := h.conf.LSPIdle - time.Since(session.LastActivity())
+				if remaining <= 0 {
+					cancel(errIdle)
+					return
+				}
+				timer.Reset(remaining)
+			}
+		}
+	}()
+	touch := session.Touch
 
 	// Браузер -> языковой сервер.
 	go func() {

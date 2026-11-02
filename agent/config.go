@@ -23,7 +23,8 @@ type Config struct {
 	MaxSessions    int                 // сессий на агенте
 	MaxLSP         int                 // одновременных процессов языкового сервера
 	SessionIdle    time.Duration       // сессия без активности удаляется
-	LSPIdle        time.Duration       // подключение без сообщений закрывается
+	LSPIdle        time.Duration       // подключение без активности (сообщений LSP и запросов сессии) закрывается
+	SessionMax     time.Duration       // абсолютный срок жизни сессии с момента создания (0 - без лимита)
 	Limits         Limits              // квоты одной сессии
 	MaxMessageSize int64               // максимальный размер сообщения LSP, байт
 }
@@ -107,8 +108,9 @@ func LoadConfig() Config {
 		WorkspaceRoot:  root,
 		MaxSessions:    getenvInt("AGENT_MAX_SESSIONS", 50),
 		MaxLSP:         getenvInt("AGENT_MAX_LSP", 4),
-		SessionIdle:    getenvDuration("AGENT_SESSION_IDLE", 10*time.Minute),
+		SessionIdle:    getenvDuration("AGENT_SESSION_IDLE", 15*time.Minute),
 		LSPIdle:        getenvDuration("AGENT_LSP_IDLE", 5*time.Minute),
+		SessionMax:     getenvDuration("AGENT_SESSION_MAX", 4*time.Hour),
 		Limits: Limits{
 			MaxFiles:      getenvInt("AGENT_MAX_FILES", 100),
 			MaxFileBytes:  int64(getenvInt("AGENT_MAX_FILE_BYTES", 1<<20)),

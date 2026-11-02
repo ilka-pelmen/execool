@@ -689,3 +689,37 @@ func TestUsedTicketsAcceptEachOnce(t *testing.T) {
 		t.Fatal("после очистки номер можно использовать снова")
 	}
 }
+
+func TestReapRemovesSessionsPastMaxLifetime(t *testing.T) {
+	h, cfg := newTestHandler(t)
+	cfg.SessionMax = time.Hour
+	createSession(t, h, "s1")
+	createSession(t, h, "s2")
+
+	// s1 создана давно, но активна: абсолютный срок всё равно её удаляет.
+	h.Manager.mu.Lock()
+	h.Manager.sessions["s1"].Created = time.Now().Add(-2 * time.Hour)
+	h.Manager.mu.Unlock()
+
+	if n := h.Manager.Reap(); n != 1 {
+		t.Fatalf("удалено сессий: %d, ожидали 1", n)
+	}
+
+	public := h.PublicRoutes()
+	expectStatus(t, do(public, "GET", "/sessions/s1", "", bearer(filesToken("s1"))), 404, "session_not_found")
+	expectStatus(t, do(public, "GET", "/sessions/s2", "", bearer(filesToken("s2"))), 200, "")
+}
+
+func TestReapIgnoresMaxLifetimeWhenDisabled(t *testing.T) {
+	h, cfg := newTestHandler(t)
+	cfg.SessionMax = 0
+	createSession(t, h, "s1")
+
+	h.Manager.mu.Lock()
+	h.Manager.sessions["s1"].Created = time.Now().Add(-100 * time.Hour)
+	h.Manager.mu.Unlock()
+
+	if n := h.Manager.Reap(); n != 0 {
+		t.Fatalf("удалено сессий: %d, ожидали 0", n)
+	}
+}

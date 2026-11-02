@@ -195,6 +195,7 @@ func (h *WebHandler) SessionInfo(w http.ResponseWriter, r *http.Request, s *Sess
 		"files":        s.Workspace.FileCount(),
 		"lspConnected": s.hasLSP(),
 		"expiresAt":    s.LastActivity().Add(h.Config.SessionIdle).UTC().Format(time.RFC3339),
+		"maxExpiresAt": s.maxExpiresAt(h.Config.SessionMax),
 	})
 	return nil
 }

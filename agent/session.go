@@ -23,6 +23,7 @@ type Session struct {
 	ID        string
 	Language  string
 	Dir       string
+	Created   time.Time
 	Workspace *Workspace
 	lastNano  atomic.Int64
 	mu        sync.Mutex
@@ -60,6 +61,14 @@ func (s *Session) cancelLSP(cause error) chan struct{} {
 	}
 	cancel(cause)
 	return done
+}
+
+// maxExpiresAt: момент, когда сессия будет удалена по абсолютному сроку (пусто, если лимита нет).
+func (s *Session) maxExpiresAt(max time.Duration) string {
+	if max <= 0 {
+		return ""
+	}
+	return s.Created.Add(max).UTC().Format(time.RFC3339)
 }
 
 func (s *Session) hasLSP() bool {
@@ -115,7 +124,7 @@ func (m *SessionManager) Create(id string, language string) (*Session, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return nil, err
 	}
-	session := &Session{ID: id, Language: language, Dir: dir, Workspace: NewWorkspace(dir, m.conf.Limits, language)}
+	session := &Session{ID: id, Language: language, Dir: dir, Created: time.Now(), Workspace: NewWorkspace(dir, m.conf.Limits, language)}
 	session.Touch()
 	m.sessions[id] = session
 	return session, nil
@@ -154,13 +163,16 @@ func (m *SessionManager) Delete(id string) {
 	}
 }
 
-// Reap удаляет сессии без активности и без подключённого языкового сервера.
+// Reap удаляет сессии без активности и без подключённого языкового сервера,
+// а также любые сессии старше SessionMax (даже если они активны).
 func (m *SessionManager) Reap() int {
 	now := time.Now()
 	var expired []string
 	m.mu.Lock()
 	for id, session := range m.sessions {
-		if now.Sub(session.LastActivity()) > m.conf.SessionIdle && !session.hasLSP() {
+		idle := now.Sub(session.LastActivity()) > m.conf.SessionIdle && !session.hasLSP()
+		tooOld := m.conf.SessionMax > 0 && now.Sub(session.Created) > m.conf.SessionMax
+		if idle || tooOld {
 			expired = append(expired, id)
 		}
 	}
