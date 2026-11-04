@@ -67,9 +67,9 @@ func (h *WebHandler) PublicRoutes() http.Handler {
 func (h *WebHandler) InternalRoutes() http.Handler {
 	mux := http.NewServeMux()
 
-	mux.Handle("GET /internal/status", h.internalAuth(h.Status))
-	mux.Handle("POST /internal/sessions", h.internalAuth(h.CreateSession))
-	mux.Handle("DELETE /internal/sessions/{id}", h.internalAuth(h.DeleteSession))
+	mux.Handle("GET /status", h.internalAuth(h.Status))
+	mux.Handle("POST /sessions", h.internalAuth(h.CreateSession))
+	mux.Handle("DELETE /sessions/{id}", h.internalAuth(h.DeleteSession))
 
 	return mux
 }

@@ -13,7 +13,6 @@ import (
 
 type Config struct {
 	AgentPort      string
-	InternalAddr   string              // адрес внутреннего API (для Spring), по умолчанию только localhost
 	AgentID        string              // значение поля aud в токенах: токен действует только на этом агенте
 	APIKey         string              // ключ внутреннего API (вызовы от Spring)
 	TokenSecret    []byte              // секрет подписи токенов (общий со Spring)
@@ -99,7 +98,6 @@ func LoadConfig() Config {
 
 	return Config{
 		AgentPort:      *port,
-		InternalAddr:   getenv("AGENT_INTERNAL_ADDR", "127.0.0.1:6722"),
 		AgentID:        getenv("AGENT_ID", "agent-1"),
 		APIKey:         apiKey,
 		TokenSecret:    []byte(secret),

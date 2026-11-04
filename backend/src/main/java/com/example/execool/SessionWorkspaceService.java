@@ -11,15 +11,15 @@ import java.util.Map;
 public class SessionWorkspaceService {
 
     private final RestTemplate restTemplate;
-    private final String agentInternalUrl;
+    private final String agentUrl;
     private final String agentApiKey;
 
     public SessionWorkspaceService(
             RestTemplate restTemplate,
-            @Value("${app.agent.internal-url}") String agentInternalUrl,
+            @Value("${app.agent.url}") String agentUrl,
             @Value("${app.agent.api-key}") String agentApiKey) {
         this.restTemplate = restTemplate;
-        this.agentInternalUrl = agentInternalUrl.replaceAll("/+$", "");
+        this.agentUrl = agentUrl.replaceAll("/+$", "");
         this.agentApiKey = agentApiKey;
     }
 
@@ -30,7 +30,7 @@ public class SessionWorkspaceService {
         );
 
         ResponseEntity<AgentSession> response = restTemplate.exchange(
-                agentInternalUrl + "/internal/sessions",
+                agentUrl + "/internal/sessions",
                 HttpMethod.POST,
                 agentRequest(body),
                 AgentSession.class
@@ -46,7 +46,7 @@ public class SessionWorkspaceService {
 
     public void deleteSession(String sessionId) {
         restTemplate.exchange(
-                agentInternalUrl + "/internal/sessions/{id}",
+                agentUrl + "/internal/sessions/{id}",
                 HttpMethod.DELETE,
                 agentRequest(null),
                 Void.class,

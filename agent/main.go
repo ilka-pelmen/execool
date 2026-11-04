@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -28,30 +29,29 @@ func main() {
 
 	go manager.RunReaper(ctx)
 
-	public := &http.Server{
-		Addr:              ":" + cfg.AgentPort,
-		Handler:           handler.PublicRoutes(),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       60 * time.Second,
-	}
-	internal := &http.Server{
-		Addr:              cfg.InternalAddr,
-		Handler:           handler.InternalRoutes(),
+	internalMux := handler.InternalRoutes()
+	publicMux := handler.PublicRoutes()
+
+	server := &http.Server{
+		Addr: ":" + cfg.AgentPort,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/internal" || strings.HasPrefix(r.URL.Path, "/internal/") {
+				http.StripPrefix("/internal", internalMux).ServeHTTP(w, r)
+				return
+			}
+			publicMux.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
 
 	errCh := make(chan error, 2)
-	serve := func(name string, server *http.Server) {
-		go func() {
-			log.Printf("[Agent] %s API on %s", name, server.Addr)
-			if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- fmt.Errorf("%s server failed: %w", name, err)
-			}
-		}()
-	}
-	serve("public", public)
-	serve("internal", internal)
+	go func() {
+		log.Printf("[Agent] Server API on %s", server.Addr)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("Server failed: %w", err)
+		}
+	}()
 
 	select {
 	case <-ctx.Done():
@@ -64,10 +64,9 @@ func main() {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	for _, server := range []*http.Server{public, internal} {
-		if err := server.Shutdown(shutdownCtx); err != nil {
-			_ = server.Close()
-		}
+
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		_ = server.Close()
 	}
 
 	lsp.Wait(5 * time.Second)

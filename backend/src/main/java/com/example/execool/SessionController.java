@@ -30,7 +30,7 @@ public class SessionController {
     public SessionController(
             SessionWorkspaceService workspaceService,
             AgentTokenService tokenService,
-            @Value("${app.agent.public-url}") String agentPublicUrl) {
+            @Value("${app.agent.url}") String agentPublicUrl) {
         this.workspaceService = workspaceService;
         this.tokenService = tokenService;
         this.agentPublicUrl = agentPublicUrl.replaceAll("/+$", "");
