@@ -1,0 +1,104 @@
+diff -ruN -U1 a/lsp.go b/lsp.go
+--- a/lsp.go	2026-11-03 07:11:31.857235977 +0000
++++ b/lsp.go	2026-11-03 07:11:31.860883458 +0000
+@@ -297,7 +297,7 @@
+ // (AGENT_API_KEY, AGENT_TOKEN_SECRET) и чужие переменные ему не передаются.
+ func lspEnvironment(home string) []string {
+ 	env := []string{"HOME=" + home, "USERPROFILE=" + home, "LANG=C.UTF-8"}
+-	for _, key := range []string{"PATH", "SystemRoot", "TEMP", "TMP"} {
++	for _, key := range []string{"PATH", "SystemRoot", "TEMP", "TMP", "TMPDIR"} {
+ 		if value, ok := os.LookupEnv(key); ok {
+ 			env = append(env, key+"="+value)
+ 		}
+diff -ruN -U1 a/pathmask.go b/pathmask.go
+--- a/pathmask.go	2026-11-03 07:11:31.857686755 +0000
++++ b/pathmask.go	2026-11-03 07:11:31.861650935 +0000
+@@ -3,6 +3,7 @@
+ import (
+ 	"bytes"
+ 	"encoding/json"
++	"os"
+ 	"path/filepath"
+ 	"strings"
+ )
+@@ -13,6 +14,11 @@
+ const (
+ 	virtualRootPath = "/workspace"
+ 	virtualRootURI  = "file:///workspace"
++
++	// Заглушки стандартной библиотеки: Pyrefly распаковывает их во временную папку
++	// и отдаёт оттуда адреса при переходе к определению (print, len, str...).
++	virtualTypeshedPath = "/typeshed"
++	virtualTypeshedURI  = "file:///typeshed"
+ )
+ 
+ // Ключи LSP, в которых лежат адреса файлов. Остальные строки (в первую очередь текст
+@@ -47,22 +53,29 @@
+ 	}
+ 
+ 	for _, d := range dirs {
+-		slashed := filepath.ToSlash(d)
+-		if !strings.HasPrefix(slashed, "/") {
+-			slashed = "/" + slashed // Windows: C:/... -> /C:/...
+-		}
+-
+ 		// Сначала адрес, потом просто путь: так порядок замен не портит адреса.
+ 		m.add(fileURI(d), virtualRootURI)
+-		m.add(slashed, virtualRootPath)
++		m.add(slashPath(d), virtualRootPath)
+ 		if strings.Contains(d, `\`) {
+ 			// Путь Windows внутри JSON выглядит как C:\\Users\\...
+ 			m.add(strings.ReplaceAll(d, `\`, `\\`), virtualRootPath)
+ 		}
+ 	}
++
++	bundled := filepath.Join(os.TempDir(), "pyrefly_bundled")
++	m.add(fileURI(bundled), virtualTypeshedURI)
++	m.add(slashPath(bundled), virtualTypeshedPath)
+ 	return m
+ }
+ 
++func slashPath(dir string) string {
++	p := filepath.ToSlash(dir)
++	if !strings.HasPrefix(p, "/") {
++		p = "/" + p // Windows: C:/... -> /C:/...
++	}
++	return p
++}
++
+ func (m *pathMapper) add(from, to string) {
+ 	if len(from) < 4 {
+ 		return // слишком короткий путь заменил бы лишнее
+diff -ruN -U1 a/pathmask_test.go b/pathmask_test.go
+--- a/pathmask_test.go	2026-11-03 07:11:31.857721426 +0000
++++ b/pathmask_test.go	2026-11-03 07:11:31.861690911 +0000
+@@ -1,6 +1,8 @@
+ package main
+ 
+ import (
++	"os"
++	"path/filepath"
+ 	"strings"
+ 	"testing"
+ )
+@@ -72,3 +74,18 @@
+ 		t.Fatalf("после замены туда и обратно: %s", back)
+ 	}
+ }
++
++func TestPathMapperHidesBundledTypeshed(t *testing.T) {
++	m := newPathMapper(maskTestDir)
++	bundled := filepath.Join(os.TempDir(), "pyrefly_bundled")
++	in := `{"result":[{"uri":"` + fileURI(bundled) + `/stdlib/builtins.pyi"}]}`
++
++	out := string(m.ToClient([]byte(in)))
++
++	if strings.Contains(out, "pyrefly_bundled") {
++		t.Fatalf("путь к заглушкам не скрыт: %s", out)
++	}
++	if !strings.Contains(out, `"uri":"file:///typeshed/stdlib/builtins.pyi"`) {
++		t.Fatalf("неожиданный ответ: %s", out)
++	}
++}
+
+

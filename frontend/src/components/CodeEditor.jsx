@@ -96,7 +96,14 @@ const blackTheme = EditorView.theme(
 );
 
 const editableCompartment = new Compartment();
+const lspCompartment = new Compartment();
 const externalChange = Annotation.define();
+
+// Подсказки языкового сервера: расширение привязано к URI файла на агенте.
+function lspExtensions(client, rootUri, path) {
+  if (!client || !rootUri || !/\.pyi?$/i.test(path)) return [];
+  return client.plugin(`${rootUri}/${path}`, "python");
+}
 
 function editableExtensions(readOnly) {
   return [EditorState.readOnly.of(readOnly), EditorView.editable.of(!readOnly)];
@@ -136,16 +143,24 @@ export default function CodeEditor({
   value,
   onChange,
   readOnly = false,
-  issues = [],
+  issues, // диагностика не от LSP; при включённых подсказках не передавать
+  lspClient = null,
+  lspRootUri = null,
 }) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
   const pathRef = useRef(filePath);
   const onChangeRef = useRef(onChange);
+  const lspRef = useRef({ client: lspClient, rootUri: lspRootUri });
+  const appliedClientRef = useRef(null); // клиент, с которым собрано текущее состояние редактора
 
   onChangeRef.current = onChange;
+  lspRef.current = { client: lspClient, rootUri: lspRootUri };
 
   function createState(path, doc) {
+    const { client, rootUri } = lspRef.current;
+    appliedClientRef.current = client;
+
     return EditorState.create({
       doc,
       extensions: [
@@ -166,6 +181,7 @@ export default function CodeEditor({
         blackTheme,
         syntaxHighlighting(oneDarkHighlightStyle),
         editableCompartment.of(editableExtensions(readOnly)),
+        lspCompartment.of(lspExtensions(client, rootUri, path)),
         EditorView.updateListener.of((update) => {
           const external = update.transactions.some((tr) =>
             tr.annotation(externalChange)
@@ -178,7 +194,6 @@ export default function CodeEditor({
     });
   }
 
-  // Остальной код компонента без изменений...
   useEffect(() => {
     const view = new EditorView({
       state: createState(filePath, value),
@@ -217,9 +232,26 @@ export default function CodeEditor({
     });
   }, [readOnly]);
 
+  // Клиент LSP появился, пропал или заменился (переподключение): меняем расширение.
+  // При смене файла состояние собирается заново в createState, этот эффект тогда ничего не делает.
   useEffect(() => {
     const view = viewRef.current;
-    if (!view) return;
+    if (!view || appliedClientRef.current === lspClient) return;
+
+    appliedClientRef.current = lspClient;
+    view.dispatch({
+      effects: lspCompartment.reconfigure(
+        lspExtensions(lspClient, lspRootUri, pathRef.current)
+      ),
+    });
+
+    // Без клиента старые подчёркивания остались бы в тексте.
+    if (!lspClient) view.dispatch(setDiagnostics(view.state, []));
+  }, [lspClient, lspRootUri]);
+
+  useEffect(() => {
+    const view = viewRef.current;
+    if (!view || !issues) return;
 
     view.dispatch(
       setDiagnostics(view.state, toDiagnostics(view.state.doc, issues))

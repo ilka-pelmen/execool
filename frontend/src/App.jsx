@@ -15,11 +15,14 @@ import {
 import { loadProject, saveProject } from "./services/storage.js";
 import { validatePath, pickRunTarget } from "./services/files.js";
 import { createZip, downloadBlob } from "./services/export_zip.js";
+import { useLanguageServer } from "./services/useLanguageServer.js";
 
 import "./styles-start.css";
+import "./styles-lsp.css";
 
 const RUN_TIMEOUT_MS = 30_000;
 const MAX_LINES = 2000; // сколько строк вывода держим на экране
+const LSP_LANGUAGE = "python";
 
 export default function App() {
   const [project, setProject] = useState(null);
@@ -43,6 +46,9 @@ export default function App() {
   const activeFileData =
     files.find((file) => file.path === activeFile) ?? files[0] ?? null;
   const projectType = project ? getProjectType(project.type) : null;
+  const lsp = useLanguageServer(project, LSP_LANGUAGE, {
+    openFile: (path) => handleSelectFile(path),
+  });
 
   // Вывод копится и выводится на экран не чаще раза в 50 мс.
   function flushOutput() {
@@ -150,6 +156,13 @@ export default function App() {
     }));
   }
 
+  // Перед сменой файла досылаем правки на агент: при закрытии документа
+  // языковой сервер перечитывает файл с диска, и там должна лежать свежая версия.
+  async function handleSelectFile(path) {
+    await lsp.flush();
+    setActiveFile(path);
+  }
+
   function handleCreateFile(rawPath) {
     const result = validatePath(
       rawPath,
@@ -235,6 +248,11 @@ export default function App() {
         runtimeStatus={runtimeStatus}
         running={running}
         canExport={files.length > 0}
+        lspEnabled={lsp.enabled}
+        lspStatus={lsp.status}
+        lspMessage={lsp.message}
+        onToggleLsp={lsp.toggle}
+        onRetryLsp={lsp.retry}
         onRun={handleRun}
         onStop={() => getEngine().stop()}
         onExport={handleExport}
@@ -245,7 +263,7 @@ export default function App() {
           projectName={project.name}
           files={files}
           activeFile={activeFileData?.path ?? null}
-          onSelect={setActiveFile}
+          onSelect={handleSelectFile}
           onCreate={handleCreateFile}
           onDelete={handleDeleteFile}
         />
@@ -255,6 +273,8 @@ export default function App() {
             filePath={activeFileData.path}
             value={activeFileData.content}
             onChange={(value) => updateFile(activeFileData.path, value)}
+            lspClient={lsp.client}
+            lspRootUri={lsp.rootUri}
           />
         ) : (
           <div className="editor-panel editor-empty">
@@ -274,6 +294,17 @@ export default function App() {
       <footer className="statusbar">
         <span>{activeFileData?.path ?? "Нет открытого файла"}</span>
         <span>{projectType?.name ?? project.type}</span>
+
+        {lsp.notice && <span className="statusbar-warning">{lsp.notice}</span>}
+
+        {lsp.unsynced.length > 0 && (
+          <span
+            className="statusbar-warning"
+            title={`Не отправлены на сервер подсказок: ${lsp.unsynced.join(", ")}`}
+          >
+            Не синхронизировано: {lsp.unsynced.length}
+          </span>
+        )}
 
         <button className="close-session" onClick={handleCloseProject}>
           Закрыть проект
