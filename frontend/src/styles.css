@@ -1,12 +1,13 @@
 :root {
   color-scheme: dark;
   font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: #ededed;
-  background: #141414;
+  color: var(--text);
+  background: var(--page);
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
 
+  --page: #141414;
   --black: #070707;
   --black-terminal: #030303;
   --line: #1f1f1f;
@@ -19,9 +20,48 @@
   --ok: #4ade80;
   --fail: #ff6b6b;
   --warn: #e0b341;
+  --focus: #fff;
+  --hover-border: #4a4a4a;
+  --primary-bg: #fff;
+  --primary-text: #000;
+  --primary-hover: #d9d9d9;
+  --file-text: #bdbdbd;
+  --file-active-text: #fff;
+  --remove-hover: #222;
+  --terminal-text: #d4d4d4;
+  --scroll-track: #060606;
+  --scroll-thumb: #2a2a2a;
   --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
 
-  scrollbar-color: #2a2a2a #060606;
+  scrollbar-color: var(--scroll-thumb) var(--scroll-track);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --page: #f3f5f8;
+  --black: #fff;
+  --black-terminal: #f5f6f8;
+  --line: #d9dee7;
+  --line-strong: #c3cad5;
+  --hover: #f1f4f8;
+  --selected: #e7edf5;
+  --text: #1f2937;
+  --muted: #64748b;
+  --faint: #8491a3;
+  --ok: #15803d;
+  --fail: #dc2626;
+  --warn: #b77906;
+  --focus: #2563eb;
+  --hover-border: #94a3b8;
+  --primary-bg: #1f2937;
+  --primary-text: #fff;
+  --primary-hover: #334155;
+  --file-text: #475569;
+  --file-active-text: #1f2937;
+  --remove-hover: #fee2e2;
+  --terminal-text: #334155;
+  --scroll-track: #eef1f5;
+  --scroll-thumb: #c3cad5;
 }
 
 * {
@@ -35,7 +75,7 @@ body,
   height: 100%;
   min-width: 320px;
   margin: 0;
-  background: var(--black);
+  background: var(--page);
 }
 
 body {
@@ -57,7 +97,7 @@ button:disabled {
 }
 
 :focus-visible {
-  outline: 2px solid #fff;
+  outline: 2px solid var(--focus);
   outline-offset: 2px;
 }
 
@@ -72,7 +112,7 @@ button:disabled {
 
 ::-webkit-scrollbar-thumb {
   border-radius: 5px;
-  background: #2a2a2a;
+  background: var(--scroll-thumb);
 }
 
 /* Каркас */
@@ -165,19 +205,19 @@ button:disabled {
 
 .button:hover:not(:disabled) {
   background: var(--hover);
-  border-color: #4a4a4a;
+  border-color: var(--hover-border);
 }
 
 .button-run {
-  border-color: #fff;
-  background: #fff;
-  color: #000;
+  border-color: var(--primary-bg);
+  background: var(--primary-bg);
+  color: var(--primary-text);
   font-weight: 600;
 }
 
 .button-run:hover:not(:disabled) {
-  border-color: #d9d9d9;
-  background: #d9d9d9;
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
 }
 
 .icon-button {
@@ -197,7 +237,7 @@ button:disabled {
 
 .icon-button:hover {
   background: var(--hover);
-  border-color: #4a4a4a;
+  border-color: var(--hover-border);
 }
 
 .text-button {
@@ -269,7 +309,7 @@ button:disabled {
 
 .file-row.active {
   background: var(--selected);
-  box-shadow: inset 2px 0 0 #fff;
+  box-shadow: inset 2px 0 0 var(--focus);
 }
 
 .file-item {
@@ -281,13 +321,13 @@ button:disabled {
   border: 0;
   padding: 8px 12px 8px 16px;
   background: transparent;
-  color: #bdbdbd;
+  color: var(--file-text);
   text-align: left;
   font-size: 13px;
 }
 
 .file-row.active .file-item {
-  color: #fff;
+  color: var(--file-active-text);
 }
 
 .file-item:focus-visible {
@@ -334,7 +374,7 @@ button:disabled {
 }
 
 .file-remove:hover {
-  background: #222;
+  background: var(--remove-hover);
   color: var(--fail);
 }
 
@@ -365,7 +405,7 @@ button:disabled {
 
 .file-input:focus {
   outline: none;
-  border-color: #fff;
+  border-color: var(--focus);
 }
 
 .file-error {
@@ -512,7 +552,7 @@ button:disabled {
   overflow: auto;
   margin: 0;
   padding: 12px 16px;
-  color: #d4d4d4;
+  color: var(--terminal-text);
   font-family: var(--mono);
   font-size: 13px;
   line-height: 1.7;

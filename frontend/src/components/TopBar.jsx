@@ -7,6 +7,8 @@ const STATUS_LABELS = {
 
 export default function TopBar({
   projectName,
+  theme,
+  onToggleTheme,
   status,
   sessionReady,
   running,
@@ -53,6 +55,18 @@ export default function TopBar({
           disabled={!sessionReady || running}
         >
           {running ? "Запуск…" : "Запустить"}
+        </button>
+
+        <button
+          className="button theme-toggle"
+          type="button"
+          onClick={onToggleTheme}
+          aria-label={`Переключить на ${theme === "dark" ? "светлую" : "тёмную"} тему`}
+          aria-pressed={theme === "light"}
+          title={`Переключить на ${theme === "dark" ? "светлую" : "тёмную"} тему`}
+        >
+          <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
+          {theme === "dark" ? "Светлая тема" : "Тёмная тема"}
         </button>
       </div>
     </header>
