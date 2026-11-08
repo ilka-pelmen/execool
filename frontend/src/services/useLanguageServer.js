@@ -12,13 +12,11 @@ function loadEnabled() {
   }
 }
 
-// Эксперимент: как сообщать серверу о новых и удалённых файлах.
-// Включить без пересборки: localStorage.setItem("execool:lsp:mode", "notify") и перезагрузить страницу.
-function loadFileSetMode() {
+function loadDebug() {
   try {
-    return localStorage.getItem("execool:lsp:mode") === "notify" ? "notify" : "restart";
+    return localStorage.getItem("execool:lsp:debug") === "1";
   } catch {
-    return "restart";
+    return false;
   }
 }
 
@@ -42,7 +40,9 @@ export function useLanguageServer(
 ) {
   const sessionRef = useRef(null);
   if (!sessionRef.current) {
-    sessionRef.current = new LspSession({ fileSetChange: loadFileSetMode() });
+    sessionRef.current = new LspSession({
+      debug: loadDebug(),
+    });
   }
   const session = sessionRef.current;
 
@@ -56,6 +56,11 @@ export function useLanguageServer(
   const hasProject = Boolean(project);
   const filesRef = useRef([]);
   filesRef.current = project?.files ?? [];
+
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
+  const hasProjectRef = useRef(hasProject);
+  hasProjectRef.current = hasProject;
 
   useEffect(() => session.subscribe(setSnapshot), [session]);
 
@@ -90,11 +95,23 @@ export function useLanguageServer(
   }, [session, enabled, hasProject, project?.files]);
 
   // Закрытие вкладки: удаляем сессию на сервере (DELETE с keepalive).
+  // Если страницу потом вернут из кэша переходов (назад/вперёд), эффекты не выполнятся
+  // заново, а сессия уже остановлена: поэтому на pageshow запускаем её снова.
   useEffect(() => {
     const onHide = () => session.stop();
+    const onShow = (event) => {
+      if (event.persisted && enabledRef.current && hasProjectRef.current) {
+        session.start(filesRef.current, languageId);
+      }
+    };
+
     window.addEventListener("pagehide", onHide);
-    return () => window.removeEventListener("pagehide", onHide);
-  }, [session]);
+    window.addEventListener("pageshow", onShow);
+    return () => {
+      window.removeEventListener("pagehide", onHide);
+      window.removeEventListener("pageshow", onShow);
+    };
+  }, [session, languageId]);
 
   function toggle() {
     const next = !enabled;

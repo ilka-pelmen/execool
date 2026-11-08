@@ -40,10 +40,7 @@ const FILE_CHANGED = 2;
 const FILE_DELETED = 3;
 
 const DEFAULTS = {
-  // Что делать, когда на агенте появился или исчез файл:
-  //  "restart" - перезапустить языковой сервер (надёжно, но на секунду пропадают подсказки);
-  //  "notify"  - отправить серверу workspace/didChangeWatchedFiles (эксперимент).
-  fileSetChange: "restart",
+  debug: false, // подробный журнал в консоль: localStorage.setItem("execool:lsp:debug", "1")
   heartbeatMs: 2 * 60_000, // строго меньше AGENT_LSP_IDLE (5 минут)
   tokenRenewMs: 10 * 60_000, // токен файлов живёт 15 минут
   syncDebounceMs: 400,
@@ -62,12 +59,24 @@ export function openWebSocketTransport(url, onClose) {
     const socket = new WebSocket(url);
     let opened = false;
 
+    // Рукопожатие, которое не завершается, не должно держать статус "Подключение…" вечно.
+    const timer = setTimeout(() => {
+      if (opened) return;
+      reject(new Error("Сервер подсказок не отвечает"));
+      try {
+        socket.close();
+      } catch {
+        // уже закрыт
+      }
+    }, 10_000);
+
     socket.onmessage = (event) => {
       const text = String(event.data);
       for (const handler of handlers) handler(text);
     };
     socket.onopen = () => {
       opened = true;
+      clearTimeout(timer);
       resolve({
         send(message) {
           if (socket.readyState === 1) socket.send(message);
@@ -84,9 +93,11 @@ export function openWebSocketTransport(url, onClose) {
       });
     };
     socket.onerror = () => {
+      clearTimeout(timer);
       if (!opened) reject(new Error("Не удалось открыть WebSocket"));
     };
     socket.onclose = (event) => {
+      clearTimeout(timer);
       if (opened) onClose(event.code);
       else reject(new Error("Не удалось открыть WebSocket"));
     };
@@ -95,7 +106,9 @@ export function openWebSocketTransport(url, onClose) {
 
 export function describeError(error) {
   if (error instanceof ApiError) {
-    if (error.status === 0) return "Нет связи с сервером";
+    if (error.status === 0) {
+      return error.code === "timeout" ? "Сервер не отвечает" : "Нет связи с сервером";
+    }
     if (error.code === "capacity") return "Сервер занят, попробуйте позже";
     if (error.code === "unsupported_language") {
       return "Язык не поддерживается сервером";
@@ -154,6 +167,10 @@ export class LspSession {
     this.navigation = {}; // { openFile(path), onUnavailable(uri) } от интерфейса
   }
 
+  #log(...args) {
+    if (this.opts.debug) console.debug("[lsp]", ...args);
+  }
+
   subscribe = (listener) => {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
@@ -167,6 +184,7 @@ export class LspSession {
   }
 
   #setState(patch) {
+    if ("status" in patch) this.#log("status ->", patch.status, patch.message ?? "");
     this.state = { ...this.state, ...patch };
     for (const listener of this.listeners) listener(this.state);
   }
@@ -239,11 +257,13 @@ export class LspSession {
       client: this.lspClient,
       rootUri: this.rootUri,
     });
+
     this.flush(); // правки, сделанные пока шло подключение
   }
 
   #fail(gen, error) {
     if (gen !== this.gen) return;
+    this.#log("ошибка:", describeError(error), error);
     this.gen++;
     this.#teardown();
     this.#setState({
@@ -328,6 +348,7 @@ export class LspSession {
   }
 
   #onSocketClosed(code) {
+    this.#log("WebSocket закрыт, код", code);
     const gen = this.gen;
     this.#dropSocket();
     if (this.state.status !== "ready") return;
@@ -381,6 +402,7 @@ export class LspSession {
       this.#becomeReady(gen);
     } catch (error) {
       if (gen !== this.gen) return;
+      this.#log("переподключение не удалось:", error);
       if (isSessionGone(error)) return void this.#recover(gen);
       this.#scheduleReconnect(gen);
     }
@@ -398,6 +420,7 @@ export class LspSession {
       return this.#fail(gen, new Error("Сессия постоянно пропадает на сервере"));
     }
     this.recoveries.push(now);
+    this.#log("сессия пропала на агенте, создаём новую");
 
     clearTimeout(this.syncTimer);
     clearTimeout(this.reconnectTimer);
@@ -437,24 +460,17 @@ export class LspSession {
       });
   }
 
-  /** На агенте появились, изменились или исчезли файлы. */
+  /**
+   * На агенте появились, изменились или исчезли файлы. Соединение с языковым сервером
+   * не трогаем: сообщаем ему об изменениях на диске уведомлением LSP, как это делает
+   * редактор с файловым наблюдателем. Так сервер узнаёт о новых и удалённых модулях и
+   * перечитывает изменившиеся с диска.
+   */
   #onFilesChanged(gen, changes) {
     if (gen !== this.gen || this.state.status !== "ready") return;
+    if (changes.length === 0) return;
 
-    // Правки содержимого открытого файла сервер получает через didChange; интересны
-    // только появившиеся и удалённые файлы.
-    const structural = changes.filter((change) => change.type !== FILE_CHANGED);
-    if (structural.length === 0) return;
-
-    if (this.opts.fileSetChange === "notify") {
-      this.#notifyFileChanges(structural);
-    } else {
-      this.#restartServer(gen);
-    }
-  }
-
-  /** Сообщаем серверу об изменениях на диске, не перезапуская его. */
-  #notifyFileChanges(changes) {
+    this.#log("файлы на диске изменились:", changes);
     this.transport?.send(
       JSON.stringify({
         jsonrpc: "2.0",
@@ -467,20 +483,6 @@ export class LspSession {
         },
       })
     );
-  }
-
-  /**
-   * Языковой сервер узнаёт о новых и удалённых файлах только при старте: клиент
-   * не сообщает ему об изменениях на диске. Поэтому после смены набора файлов
-   * перезапускаем сервер. Сессия та же, процесс новый, файлы уже на диске.
-   */
-  #restartServer(gen) {
-    if (gen !== this.gen || this.state.status !== "ready") return;
-
-    this.#dropSocket();
-    this.reconnectAttempts = 0;
-    this.#setState({ client: null, message: "Обновление списка файлов" });
-    this.#scheduleReconnect(gen, true);
   }
 
   #enqueue(task) {
@@ -499,7 +501,11 @@ export class LspSession {
     let total = 0;
 
     for (const file of files) {
-      const size = utf8Length(file.content);
+      // Пустой файл на диске агента не создаём: языковой сервер может не суметь его
+      // загрузить ("failed to load"). Одного перевода строки достаточно, для Python
+      // это тот же пустой модуль; в редакторе содержимое остаётся пустым.
+      const content = file.content === "" ? "\n" : file.content;
+      const size = utf8Length(content);
       if (
         validatePath(file.path, []).error ||
         send.size >= max_files ||
@@ -509,7 +515,7 @@ export class LspSession {
         skipped.push(file.path);
         continue;
       }
-      send.set(file.path, file.content);
+      send.set(file.path, content);
       total += size;
     }
     return { send, skipped };

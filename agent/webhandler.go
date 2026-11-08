@@ -159,7 +159,7 @@ func (h *WebHandler) CreateSession(w http.ResponseWriter, r *http.Request) error
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":       session.ID,
 		"language": session.Language,
-		"rootUri":  fileURI(session.Dir),
+		"rootUri":  virtualRootURI, // настоящий путь браузеру не показываем
 		"limits": map[string]any{
 			"maxFiles":      h.Config.Limits.MaxFiles,
 			"maxFileBytes":  h.Config.Limits.MaxFileBytes,

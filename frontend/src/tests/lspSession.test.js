@@ -1,7 +1,7 @@
 // Запуск: node --test src/services/lspSession.test.js
 // Сеть, WebSocket и библиотека LSP заменены заглушками.
 
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 
 import { LspSession } from "./lspSession.js";
@@ -104,8 +104,14 @@ function createWorld(overrides = {}) {
   return world;
 }
 
+// Сессии, оставшиеся после упавшего теста, иначе держат процесс таймерами.
+const openSessions = [];
+afterEach(() => {
+  for (const session of openSessions.splice(0)) session.stop();
+});
+
 function createSession(world, extra = {}) {
-  return new LspSession({
+  const session = new LspSession({
     heartbeatMs: 30,
     tokenRenewMs: 100_000,
     syncDebounceMs: 5,
@@ -128,13 +134,16 @@ function createSession(world, extra = {}) {
       },
     }),
     createTransport: async (url, onClose) => {
+      if (world.transportDelayMs) await sleep(world.transportDelayMs);
       world.calls.push({ method: "WS", url });
       const transport = {
         url,
         closed: false,
         sent: [],
         send(message) {
-          this.sent.push(JSON.parse(message));
+          const parsed = JSON.parse(message);
+          this.sent.push(parsed);
+          world.calls.push({ method: "WS-SEND", url: parsed.method });
         },
         subscribe() {},
         unsubscribe() {},
@@ -148,6 +157,8 @@ function createSession(world, extra = {}) {
     },
     ...extra,
   });
+  openSessions.push(session);
+  return session;
 }
 
 const FILES = [
@@ -208,11 +219,6 @@ test("правки отправляются разницей: изменённы
     // util.py удалён
   ]);
   await until(() => calls(world, "DELETE", "/file?path=").length === 1, "DELETE");
-  // Набор файлов изменился, поэтому языковой сервер перезапускается: ждём возвращения в ready.
-  await until(
-    () => world.transports.length === 2 && session.getSnapshot().status === "ready",
-    "restart"
-  );
 
   assert.deepEqual(
     calls(world, "PUT", "/file?path=").map((c) => c.url.split("path=")[1]).sort(),
@@ -379,53 +385,6 @@ test("stop() во время подключения: созданная сесс
   assert.equal(world.transports.length, 0);
 });
 
-test("новый файл перезапускает языковой сервер: тот же сеанс, новый билет", async () => {
-  const world = createWorld();
-  const session = createSession(world);
-  await session.start(FILES);
-  const firstClient = session.getSnapshot().client;
-
-  session.syncFiles([...FILES, { path: "utils.py", content: "def f(): ...\n" }]);
-  await until(
-    () => world.transports.length === 2 && session.getSnapshot().status === "ready",
-    "restart after create"
-  );
-
-  assert.equal(calls(world, "POST", "/start-lsp").length, 1, "новая сессия не создавалась");
-  assert.equal(calls(world, "POST", "/lsp-ticket").length, 1);
-  assert.ok(world.transports[0].closed);
-  assert.ok(firstClient.disconnected);
-  assert.notEqual(session.getSnapshot().client, firstClient);
-  // Файл попал на диск раньше, чем открылось новое соединение.
-  const order = world.calls.map((c) => `${c.method} ${c.url}`);
-  assert.ok(
-    order.findIndex((c) => c.includes("file?path=utils.py")) <
-      order.findIndex((c) => c.includes("ticket=B")),
-    "файл должен быть на агенте до нового подключения"
-  );
-  session.stop();
-});
-
-test("удаление файла тоже перезапускает сервер, а правка содержимого нет", async () => {
-  const world = createWorld();
-  const session = createSession(world);
-  await session.start(FILES);
-
-  // Только содержимое: перезапуска нет.
-  session.syncFiles([{ path: "main.py", content: "правка" }, FILES[1]]);
-  await session.flush();
-  await sleep(40);
-  assert.equal(world.transports.length, 1);
-
-  // Файл удалён: перезапуск есть.
-  session.syncFiles([{ path: "main.py", content: "правка" }]);
-  await until(
-    () => world.transports.length === 2 && session.getSnapshot().status === "ready",
-    "restart after delete"
-  );
-  session.stop();
-});
-
 test("с DefaultWorkspace клиент получает свой рабочий проводник, без него стандартный", async () => {
   class FakeDefaultWorkspace {
     constructor(client) {
@@ -466,37 +425,96 @@ test("с DefaultWorkspace клиент получает свой рабочий 
   second.stop();
 });
 
-test("режим notify: серверу сообщают о создании и удалении файла, перезапуска нет", async () => {
+test("файлы на диске меняются: серверу уходит уведомление, соединение не трогается", async () => {
   const world = createWorld();
-  const session = createSession(world, { fileSetChange: "notify" });
+  const session = createSession(world);
+  const statuses = [];
+  session.subscribe((state) => statuses.push(state.status));
   await session.start(FILES);
+  const afterStart = statuses.length;
   const transport = world.transports[0];
+  const root = "file:///tmp/execool/session-s1";
 
-  // Новый файл: событие "создан".
+  // Новый файл.
   session.syncFiles([...FILES, { path: "utils.py", content: "x = 1\n" }]);
-  await until(() => transport.sent.length === 1, "created event");
+  await until(() => transport.sent.length === 1, "created");
   assert.deepEqual(transport.sent[0], {
     jsonrpc: "2.0",
     method: "workspace/didChangeWatchedFiles",
-    params: {
-      changes: [{ uri: "file:///tmp/execool/session-s1/utils.py", type: 1 }],
-    },
+    params: { changes: [{ uri: `${root}/utils.py`, type: 1 }] },
   });
 
-  // Правка содержимого: ничего не отправляется.
-  session.syncFiles([{ path: "main.py", content: "правка" }, FILES[1], { path: "utils.py", content: "x = 1\n" }]);
+  // Изменился модуль: сервер должен перечитать его с диска.
+  session.syncFiles([FILES[0], FILES[1], { path: "utils.py", content: "x = 2\n" }]);
+  await until(() => transport.sent.length === 2, "changed");
+  assert.deepEqual(transport.sent[1].params.changes, [{ uri: `${root}/utils.py`, type: 2 }]);
+
+  // Файл удалён.
+  session.syncFiles([FILES[0], { path: "utils.py", content: "x = 2\n" }]);
+  await until(() => transport.sent.length === 3, "deleted");
+  assert.deepEqual(transport.sent[2].params.changes, [{ uri: `${root}/util.py`, type: 3 }]);
+
+  // Ни переподключения, ни смены статуса: индикатор не мигает.
+  assert.equal(world.transports.length, 1);
+  assert.equal(calls(world, "POST", "/lsp-ticket").length, 0);
+  assert.ok(!transport.closed);
+  assert.ok(statuses.slice(afterStart).every((status) => status === "ready"));
+  session.stop();
+});
+
+test("уведомление уходит после записи файла на агент, а не до", async () => {
+  const world = createWorld();
+  const session = createSession(world);
+  await session.start(FILES);
+
+  session.syncFiles([...FILES, { path: "utils.py", content: "x = 1\n" }]);
+  await until(() => calls(world, "WS-SEND", "didChangeWatchedFiles").length === 1, "notification");
+
+  const order = world.calls.map((c) => `${c.method} ${c.url}`);
+  const put = order.findIndex((c) => c.startsWith("PUT") && c.includes("path=utils.py"));
+  const sent = order.findIndex((c) => c.startsWith("WS-SEND"));
+  assert.ok(put >= 0 && put < sent, "сначала файл на агенте, потом уведомление");
+  session.stop();
+});
+
+test("flush: к моменту возврата файл на агенте и сервер уже уведомлён (смена файла в редакторе)", async () => {
+  const world = createWorld();
+  const session = createSession(world);
+  await session.start(FILES);
+  const transport = world.transports[0];
+
+  session.syncFiles([{ path: "main.py", content: "правка" }, FILES[1]]);
   await session.flush();
-  await sleep(30);
+
   assert.equal(transport.sent.length, 1);
-
-  // Удаление: событие "удалён".
-  session.syncFiles([{ path: "main.py", content: "правка" }, { path: "utils.py", content: "x = 1\n" }]);
-  await until(() => transport.sent.length === 2, "deleted event");
-  assert.deepEqual(transport.sent[1].params.changes, [
-    { uri: "file:///tmp/execool/session-s1/util.py", type: 3 },
+  assert.deepEqual(transport.sent[0].params.changes, [
+    { uri: "file:///tmp/execool/session-s1/main.py", type: 2 },
   ]);
+  session.stop();
+});
 
-  assert.equal(world.transports.length, 1, "сервер не перезапускался");
-  assert.equal(session.getSnapshot().status, "ready");
+test("пустой файл на агент отправляется как перевод строки, и при полной, и при разностной синхронизации", async () => {
+  const world = createWorld();
+  const session = createSession(world);
+  await session.start([{ path: "main.py", content: "print(1)" }, { path: "empty.py", content: "" }]);
+
+  const full = JSON.parse(calls(world, "PUT", "/files")[0].body);
+  assert.deepEqual(full.files.find((f) => f.path === "empty.py"), { path: "empty.py", content: "\n" });
+
+  // Новый пустой файл (как при создании в проводнике).
+  session.syncFiles([
+    { path: "main.py", content: "print(1)" },
+    { path: "empty.py", content: "" },
+    { path: "new.py", content: "" },
+  ]);
+  await session.flush();
+
+  const put = calls(world, "PUT", "path=new.py")[0];
+  assert.equal(put.body, "\n");
+
+  // Повторная синхронизация без правок ничего не отправляет: сравниваем то, что лежит на агенте.
+  const before = world.calls.length;
+  await session.flush();
+  assert.equal(world.calls.length, before);
   session.stop();
 });

@@ -5,6 +5,7 @@
 
 const API_BASE = "/api";
 const JSON_HEADERS = { "Content-Type": "application/json" };
+const REQUEST_TIMEOUT_MS = 15_000; // без таймаута зависший сервер оставил бы подсказки в "Подключение…" навсегда
 
 export class ApiError extends Error {
   constructor(status, code, message) {
@@ -18,8 +19,14 @@ export class ApiError extends Error {
 async function request(url, options = {}) {
   let response;
   try {
-    response = await fetch(url, options);
-  } catch {
+    response = await fetch(url, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      ...options,
+    });
+  } catch (error) {
+    if (error?.name === "TimeoutError") {
+      throw new ApiError(0, "timeout", "Сервер не отвечает");
+    }
     throw new ApiError(0, "network", "Нет связи с сервером");
   }
 

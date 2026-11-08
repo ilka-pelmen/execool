@@ -225,6 +225,9 @@ func (h *LSPHost) Serve(w http.ResponseWriter, r *http.Request, session *Session
 	}()
 	touch := session.Touch
 
+	// Браузер видит виртуальный корень вместо настоящей папки сессии.
+	mapper := newPathMapper(session.Dir)
+
 	// Браузер -> языковой сервер.
 	go func() {
 		defer cancel(nil)
@@ -236,7 +239,7 @@ func (h *LSPHost) Serve(w http.ResponseWriter, r *http.Request, session *Session
 				return
 			}
 			touch()
-			if err := writeMessage(stdin, data); err != nil {
+			if err := writeMessage(stdin, mapper.ToServer(data)); err != nil {
 				return
 			}
 		}
@@ -254,6 +257,7 @@ func (h *LSPHost) Serve(w http.ResponseWriter, r *http.Request, session *Session
 			}
 			touch()
 
+			body = mapper.ToClient(body)
 			writeCtx, writeDone := context.WithTimeout(ctx, 10*time.Second)
 			err = conn.Write(writeCtx, websocket.MessageText, body)
 			writeDone()
@@ -293,7 +297,7 @@ func closeStatus(cause error) (websocket.StatusCode, string) {
 // (AGENT_API_KEY, AGENT_TOKEN_SECRET) и чужие переменные ему не передаются.
 func lspEnvironment(home string) []string {
 	env := []string{"HOME=" + home, "USERPROFILE=" + home, "LANG=C.UTF-8"}
-	for _, key := range []string{"PATH", "SystemRoot", "TEMP", "TMP"} {
+	for _, key := range []string{"PATH", "SystemRoot", "TEMP", "TMP", "TMPDIR"} {
 		if value, ok := os.LookupEnv(key); ok {
 			env = append(env, key+"="+value)
 		}

@@ -437,7 +437,7 @@ func TestCreateSessionResponse(t *testing.T) {
 	if body["id"] != "s1" || body["language"] != "python" {
 		t.Fatalf("ответ: %v", body)
 	}
-	if uri, _ := body["rootUri"].(string); !strings.HasPrefix(uri, "file://") || !strings.Contains(uri, "session-s1") {
+	if body["rootUri"] != virtualRootURI {
 		t.Fatalf("rootUri: %v", body["rootUri"])
 	}
 	limits, _ := body["limits"].(map[string]any)
