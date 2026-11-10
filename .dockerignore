@@ -1,0 +1,9 @@
+# Контекст сборки - корень репозитория, поэтому исключаем лишнее отсюда.
+.git
+agent
+**/node_modules
+**/target
+**/dist
+**/.idea
+**/.vscode
+backend/HELP.md

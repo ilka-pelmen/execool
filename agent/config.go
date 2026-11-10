@@ -1,24 +1,33 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"log"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 )
 
 type Config struct {
-	BaseImage       string
-	ContainerPrefix string
-	BaseSessionsDir string
 	AgentPort       string
-
-	//  Лимиты использования
-	ExecTimeout time.Duration
-	MaxOutput   int
-	MaxUpload   int64
+	AgentID         string              // значение поля aud в токенах: токен действует только на этом агенте
+	APIKey          string              // ключ внутреннего API (вызовы от Spring)
+	TokenSecret     []byte              // секрет подписи токенов (общий со Spring)
+	LSPCommands     map[string][]string // команда запуска языкового сервера
+	AllowedOrigins  []string            // шаблоны полных Origin: http://localhost:*, https://app.example.com
+	InternalAllowed []netip.Prefix      // заданный адрес сервера
+	WorkspaceRoot   string              // здесь создаются рабочие папки сессий
+	MaxSessions     int                 // сессий на агенте
+	MaxLSP          int                 // одновременных процессов языкового сервера
+	SessionIdle     time.Duration       // сессия без активности удаляется
+	LSPIdle         time.Duration       // подключение без активности (сообщений LSP и запросов сессии) закрывается
+	SessionMax      time.Duration       // абсолютный срок жизни сессии с момента создания (0 - без лимита)
+	Limits          Limits              // квоты одной сессии
+	MaxMessageSize  int64               // максимальный размер сообщения LSP, байт
 }
 
 func getenv(key, def string) string {
@@ -47,25 +56,96 @@ func getenvDuration(key string, def time.Duration) time.Duration {
 		return def
 	}
 	d, err := time.ParseDuration(v)
-	if err != nil || d < time.Second { // меньше секунды нельзя: timeout 0 = без лимита
+	if err != nil || d <= 0 {
 		log.Printf("[Config] bad %s=%q, using %s", key, v, def)
 		return def
 	}
 	return d
 }
 
+func splitList(s string) []string {
+	var items []string
+	for _, item := range strings.Split(s, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			items = append(items, item)
+		}
+	}
+	return items
+}
+
+func parseNets(key string, fallback string) []netip.Prefix {
+	var prefixes []netip.Prefix
+	for _, item := range splitList(getenv(key, fallback)) {
+		if prefix, err := netip.ParsePrefix(item); err == nil {
+			prefixes = append(prefixes, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(item)
+		if err != nil {
+			log.Fatalf("[Config] bad %s entry %q: need an IP address or a CIDR", key, item)
+		}
+		prefixes = append(prefixes, netip.PrefixFrom(addr.Unmap(), addr.Unmap().BitLen()))
+	}
+	return prefixes
+}
+
 func LoadConfig() Config {
 	port := flag.String("port", getenv("AGENT_PORT", "6721"), "Port to listen on")
 	flag.Parse()
 
-	return Config{
-		BaseImage:       getenv("AGENT_BASE_IMAGE", "docker.io/library/python:3.11-alpine"),
-		ContainerPrefix: "execool-",
-		BaseSessionsDir: filepath.Join(os.TempDir(), "execool-sessions"),
-		AgentPort:       *port,
-
-		ExecTimeout: getenvDuration("AGENT_EXEC_TIMEOUT", 30*time.Second),
-		MaxOutput:   getenvInt("AGENT_MAX_OUTPUT", 1<<20),
-		MaxUpload:   int64(getenvInt("AGENT_MAX_UPLOAD", 10<<20)),
+	apiKey := os.Getenv("AGENT_API_KEY")
+	secret := os.Getenv("AGENT_TOKEN_SECRET")
+	if len(apiKey) < 16 {
+		log.Fatal("[Config] AGENT_API_KEY is required (at least 16 characters)")
 	}
+	if len(secret) < 32 {
+		log.Fatal("[Config] AGENT_TOKEN_SECRET is required (at least 32 characters)")
+	}
+
+	raw_commands := getenv("AGENT_LSP_COMMANDS", `{"python":["pyrefly","lsp"]}`)
+
+	var commands map[string][]string
+	if err := json.Unmarshal([]byte(raw_commands), &commands); err != nil {
+		log.Fatalf("[Config] bad AGENT_LSP_COMMANDS: %v", err)
+	}
+
+	root, err := filepath.Abs(getenv("AGENT_WORKSPACE_DIR", filepath.Join(os.TempDir(), "execool-lsp")))
+	if err != nil {
+		log.Fatalf("[Config] bad AGENT_WORKSPACE_DIR: %v", err)
+	}
+
+	return Config{
+		AgentPort:       *port,
+		AgentID:         getenv("AGENT_ID", "agent-1"),
+		APIKey:          apiKey,
+		TokenSecret:     []byte(secret),
+		LSPCommands:     commands,
+		AllowedOrigins:  splitList(getenv("AGENT_ALLOWED_ORIGINS", "http://localhost:*,http://127.0.0.1:*")),
+		InternalAllowed: parseNets("AGENT_INTERNAL_ALLOWED", ""),
+		WorkspaceRoot:   root,
+		MaxSessions:     getenvInt("AGENT_MAX_SESSIONS", 50),
+		MaxLSP:          getenvInt("AGENT_MAX_LSP", 4),
+		SessionIdle:     getenvDuration("AGENT_SESSION_IDLE", 15*time.Minute),
+		LSPIdle:         getenvDuration("AGENT_LSP_IDLE", 5*time.Minute),
+		SessionMax:      getenvDuration("AGENT_SESSION_MAX", 4*time.Hour),
+		Limits: Limits{
+			MaxFiles:      getenvInt("AGENT_MAX_FILES", 100),
+			MaxFileBytes:  int64(getenvInt("AGENT_MAX_FILE_BYTES", 1<<20)),
+			MaxTotalBytes: int64(getenvInt("AGENT_MAX_TOTAL_BYTES", 5<<20)),
+		},
+		MaxMessageSize: int64(getenvInt("AGENT_MAX_MESSAGE", 2<<20)),
+	}
+}
+
+// originHostPatterns превращает шаблоны Origin в шаблоны хостов для проверки WebSocket.
+func (c Config) originHostPatterns() []string {
+	patterns := make([]string, 0, len(c.AllowedOrigins))
+	for _, origin := range c.AllowedOrigins {
+		if _, host, found := strings.Cut(origin, "://"); found {
+			patterns = append(patterns, host)
+		} else {
+			patterns = append(patterns, origin)
+		}
+	}
+	return patterns
 }

@@ -1,0 +1,166 @@
+/* Стартовый экран */
+
+.start {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+  padding: 24px;
+  background: var(--black);
+}
+
+.start-card {
+  width: min(520px, 100%);
+}
+
+.start-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 28px;
+  font-weight: 600;
+}
+
+.start-title {
+  margin: 0;
+  padding: 12px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.start-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.start-continue {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  text-align: left;
+  margin: 0 0 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  padding: 20px 12px;
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--text);
+  font-size: 13px;
+  transition: transform 0.12s, background-color 0.12s;
+}
+
+.start-continue:hover {
+  border-color: var(--line-strong);
+  background: var(--hover);
+  transform: scale(1.02);
+}
+
+.start-item:not(.start-continue) {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 16px 12px;
+  background: transparent;
+  text-align: left;
+}
+
+.start-item:not(.start-continue):not(:disabled) {
+  color: var(--muted);
+  transition: color 0.3s, background-color 0.6s;
+}
+
+.start-item:not(.start-continue):hover:not(:disabled) {
+  color: var(--text);
+  background: var(--hover);
+}
+
+.start-item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.start-item-name {
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.start-item-desc {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.wasm-badge {
+  position: relative;
+  flex: none;
+  border: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  cursor: help;
+  fill: #322c53;
+  stroke: #201c35;
+  stroke-width: 0.5;
+  transition: fill 0.5s;
+}
+
+.wasm-badge:hover {
+  fill: #504891;
+  stroke-width: 0.8;
+}
+
+.wasm-badge::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 5;
+  width: max-content;
+  max-width: 260px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  padding: 6px 9px;
+  background: #0a0a0a;
+  color: var(--text);
+  font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 12px;
+  line-height: 1.4;
+  text-align: left;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s;
+}
+
+.wasm-badge:hover::after,
+.start-item:focus-visible .wasm-badge::after {
+  opacity: 1;
+}
+
+/* Верхняя панель и вывод */
+
+.brand-project {
+  margin-left: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.status-loading .status-dot,
+.status-running .status-dot {
+  background: var(--warn);
+}
+
+.out-err {
+  color: var(--fail);
+}
+
+.out-hint {
+  color: var(--faint);
+}

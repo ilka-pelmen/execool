@@ -1,18 +1,45 @@
 const STATUS_LABELS = {
-  ready: "Онлайн",
-  starting: "Подключение…",
-  closing: "Отключение…",
-  error: "Ошибка",
+  idle: "Python не загружен",
+  loading: "Загрузка Python…",
+  ready: "Python готов",
+  running: "Выполняется…",
+  error: "Ошибка загрузки Python",
 };
+
+const LSP_LABELS = {
+  off: "Подсказки выкл",
+  connecting: "Подключение…",
+  ready: "Подсказки вкл",
+  reconnecting: "Переподключение…",
+  error: "Подсказки недоступны",
+};
+
+// Классы точки совпадают с индикатором Python.
+const LSP_DOT = {
+  off: "idle",
+  connecting: "loading",
+  ready: "ready",
+  reconnecting: "loading",
+  error: "error",
+};
+
+const LSP_HINT =
+  "Подсказки, ошибки и переход к определению от языкового сервера. " +
+  "При включении код проекта отправляется на сервер.";
 
 export default function TopBar({
   projectName,
-  status,
-  sessionReady,
+  typeName,
+  runtimeStatus,
   running,
   canExport,
-  onOpen,
+  lspEnabled,
+  lspStatus,
+  lspMessage,
+  onToggleLsp,
+  onRetryLsp,
   onRun,
+  onStop,
   onExport,
 }) {
   return (
@@ -20,40 +47,60 @@ export default function TopBar({
       <div className="brand">
         <span className="brand-mark">&lt;/&gt;</span>
         <span>Execool</span>
+        <span className="brand-project">
+          {projectName} · {typeName}
+        </span>
       </div>
 
       <div className="topbar-right">
-        <span className={`status status-${status}`}>
+        <div className="lsp-toggle">
+          <button
+            type="button"
+            role="switch"
+            aria-checked={lspEnabled}
+            aria-label="Подсказки языкового сервера"
+            className={`switch${lspEnabled ? " switch-on" : ""}`}
+            title={LSP_HINT}
+            onClick={onToggleLsp}
+          >
+            <span className="switch-thumb" />
+          </button>
+
+          <span
+            className={`status status-${LSP_DOT[lspStatus] ?? "idle"}`}
+            title={lspMessage || LSP_HINT}
+          >
+            <span className="status-dot" />
+            {lspStatus === "error" && lspMessage
+              ? lspMessage
+              : LSP_LABELS[lspStatus] ?? ""}
+          </span>
+
+          {lspStatus === "error" && (
+            <button type="button" className="button" onClick={onRetryLsp}>
+              Повторить
+            </button>
+          )}
+        </div>
+
+        <span className={`status status-${runtimeStatus}`}>
           <span className="status-dot" />
-          {STATUS_LABELS[status] ?? "Не подключено"}
+          {STATUS_LABELS[runtimeStatus] ?? ""}
         </span>
 
-        <button
-          className="button"
-          onClick={onExport}
-          disabled={!canExport}
-          title={`Скачать ${projectName}.zip`}
-        >
+        <button className="button" onClick={onExport} disabled={!canExport}>
           Экспорт
         </button>
 
-        {!sessionReady && (
-          <button
-            className="button"
-            onClick={onOpen}
-            disabled={status === "starting"}
-          >
-            Открыть проект
+        {running ? (
+          <button className="button" onClick={onStop}>
+            Остановить
+          </button>
+        ) : (
+          <button className="button button-run" onClick={onRun}>
+            Запустить
           </button>
         )}
-
-        <button
-          className="button button-run"
-          onClick={onRun}
-          disabled={!sessionReady || running}
-        >
-          {running ? "Запуск…" : "Запустить"}
-        </button>
       </div>
     </header>
   );

@@ -1,196 +1,124 @@
+// Два сервера:
+//  - бэкенд (/api): создаёт сессии и выдаёт токены;
+//  - агент (agent_url): хранит зеркало файлов и держит языковой сервер.
+// Браузер ходит к агенту напрямую, с токеном, который выдал бэкенд.
+
 const API_BASE = "/api";
+const JSON_HEADERS = { "Content-Type": "application/json" };
+const REQUEST_TIMEOUT_MS = 15_000; // без таймаута зависший сервер оставил бы подсказки в "Подключение…" навсегда
 
-/**
- * Универсальный запрос к REST API.
- */
-async function apiRequest(path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      ...(options.body !== undefined
-        ? { "Content-Type": "application/json" }
-        : {}),
-      ...options.headers,
-    },
-  });
-
-  const responseText = await response.text();
-
-  if (!response.ok) {
-    throw new Error(
-      responseText ||
-        `HTTP ${response.status}: ${response.statusText}`
-    );
-  }
-
-  // Поддержка ответов без тела, включая 204 No Content.
-  if (!responseText.trim()) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(responseText);
-  } catch {
-    throw new Error(
-      `Сервер вернул некорректный JSON для ${path}`
-    );
+export class ApiError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status; // 0 - сервер недоступен
+    this.code = code;
   }
 }
 
-/**
- * Создать новую сессию.
- * POST /api/sessions/start
- *
- * Ожидаемый ответ:
- * { "session_id": "uuid" }
- */
-export async function startSession(projectId, userId) {
-  const data = await apiRequest("/sessions/start", {
-    method: "POST",
-    body: JSON.stringify({
-      project_id: projectId,
-      user_id: userId,
-    }),
-  });
-
-  if (!data?.session_id) {
-    throw new Error(
-      "Бэкенд не вернул session_id при создании сессии"
-    );
+async function request(url, options = {}) {
+  let response;
+  try {
+    response = await fetch(url, {
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+      ...options,
+    });
+  } catch (error) {
+    if (error?.name === "TimeoutError") {
+      throw new ApiError(0, "timeout", "Сервер не отвечает");
+    }
+    throw new ApiError(0, "network", "Нет связи с сервером");
   }
 
+  const text = await response.text();
+  let data = null;
+  if (text.trim()) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // тело не JSON, например страница прокси
+    }
+  }
+
+  if (!response.ok) {
+    throw new ApiError(
+      response.status,
+      data?.error ?? `http_${response.status}`,
+      data?.message ?? `Ошибка сервера (${response.status})`
+    );
+  }
   return data;
 }
 
-/**
- * Получить список файлов проекта.
- * GET /api/sessions/{sessionId}/files
- */
-export function listFiles(sessionId) {
-  if (!sessionId) {
-    throw new Error("sessionId обязателен");
-  }
+// ---- бэкенд ----
 
-  return apiRequest(
-    `/sessions/${encodeURIComponent(sessionId)}/files`
-  );
-}
-
-/**
- * Получить содержимое файла.
- * GET /api/sessions/{sessionId}/file?path=...
- */
-export function readFile(sessionId, filePath) {
-  if (!sessionId) {
-    throw new Error("sessionId обязателен");
-  }
-
-  if (!filePath) {
-    throw new Error("filePath обязателен");
-  }
-
-  const query = new URLSearchParams({
-    path: filePath,
+/** Создаёт сессию на агенте. Возвращает всё нужное для подключения. */
+export function startLspSession(languageId) {
+  return request(`${API_BASE}/sessions/start-lsp`, {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ language_id: languageId }),
   });
+}
 
-  return apiRequest(
-    `/sessions/${encodeURIComponent(sessionId)}/file?${query}`
+/** Новый одноразовый билет для WebSocket (переподключение). */
+export function renewLspTicket(sessionId) {
+  return request(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/lsp-ticket`,
+    { method: "POST" }
   );
 }
 
-/**
- * Сохранить файл.
- * PUT /api/sessions/{sessionId}/files
- *
- * Тело:
- * { "file_path": "...", "content": "..." }
- */
-export function saveFile(sessionId, filePath, content) {
-  if (!sessionId) {
-    throw new Error("sessionId обязателен");
-  }
-
-  if (!filePath) {
-    throw new Error("filePath обязателен");
-  }
-
-  if (typeof content !== "string") {
-    throw new Error("content должен быть строкой");
-  }
-
-  return apiRequest(
-    `/sessions/${encodeURIComponent(sessionId)}/file`,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        file_path: filePath,
-        content,
-      }),
-    }
+export function renewFilesToken(sessionId) {
+  return request(
+    `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/files-token`,
+    { method: "POST" }
   );
 }
 
-/**
- * Удалить файл проекта.
- * DELETE /api/sessions/{sessionId}/file?path=...
- */
-export function deleteFile(sessionId, filePath) {
-  if (!sessionId) {
-    throw new Error("sessionId обязателен");
-  }
-
-  if (!filePath) {
-    throw new Error("filePath обязателен");
-  }
-
-  const query = new URLSearchParams({
-    path: filePath,
+/** keepalive: запрос дойдёт, даже если вкладку закрывают. */
+export function deleteSession(sessionId) {
+  return request(`${API_BASE}/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    keepalive: true,
   });
-
-  return apiRequest(
-    `/sessions/${encodeURIComponent(sessionId)}/file?${query}`,
-    {
-      method: "DELETE",
-    }
-  );
 }
 
-/**
- * Запустить код сессии.
- * POST /api/sessions/{sessionId}/run
- *
- * Бэкенд пока использует заглушку.
- */
-export function runCode(sessionId, command) {
-  if (!sessionId) {
-    throw new Error("sessionId обязателен");
-  }
+// ---- агент ----
+// conn = { agentUrl, sessionId, filesToken }
 
-  return apiRequest(
-    `/sessions/${encodeURIComponent(sessionId)}/run`,
-    {
-      method: "POST",
-      body: JSON.stringify({
-        command: command,
-      }),
-    }
-  );
+function agentRequest(conn, path, options = {}) {
+  const url = `${conn.agentUrl}/sessions/${encodeURIComponent(conn.sessionId)}${path}`;
+  return request(url, {
+    ...options,
+    headers: { Authorization: `Bearer ${conn.filesToken}`, ...options.headers },
+  });
 }
 
-/**
- * Завершить сессию и удалить её файлы.
- * DELETE /api/sessions/{sessionId}
- */
-export function stopSession(sessionId) {
-  if (!sessionId) {
-    throw new Error("sessionId обязателен");
-  }
+/** Проверка, что сессия жива. Заодно продлевает её (heartbeat). */
+export function agentInfo(conn) {
+  return agentRequest(conn, "");
+}
 
-  return apiRequest(
-    `/sessions/${encodeURIComponent(sessionId)}`,
-    {
-      method: "DELETE",
-      keepalive: true,
-    }
-  );
+/** Заменяет весь набор файлов. files: [{ path, content }] */
+export function agentReplaceFiles(conn, files) {
+  return agentRequest(conn, "/files", {
+    method: "PUT",
+    headers: JSON_HEADERS,
+    body: JSON.stringify({ files }),
+  });
+}
+
+export function agentPutFile(conn, path, content) {
+  return agentRequest(conn, `/file?path=${encodeURIComponent(path)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "text/plain; charset=utf-8" },
+    body: content,
+  });
+}
+
+export function agentDeleteFile(conn, path) {
+  return agentRequest(conn, `/file?path=${encodeURIComponent(path)}`, {
+    method: "DELETE",
+  });
 }
