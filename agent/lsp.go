@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -67,6 +68,27 @@ func writeMessage(w io.Writer, body []byte) error {
 	}
 	_, err := w.Write(body)
 	return err
+}
+
+// Конфигурации анализаторов, которые агент сам кладёт в папку сессии. Проект свои
+// конфигурации подложить не может (см. ignoredNamesByLanguage), поэтому здесь единственный
+// источник настроек языкового сервера.
+var analyzerConfigs = map[string]struct{ name, content string }{
+	"python": {
+		name: "pyrefly.toml",
+		// Без конфигурации Pyrefly добавляет в пути поиска импортов все родительские папки
+		// до корня файловой системы (/tmp/execool-lsp, /tmp, ...). Они попадают в тексты
+		// ошибок, а модули оттуда стали бы импортироваться. Оставляем только папку проекта.
+		content: "search-path = [\".\"]\ndisable-search-path-heuristics = true\nskip-interpreter-query = true\nsite-package-path = []\npython-version = \"3.14\"\n",
+	},
+}
+
+func writeAnalyzerConfig(dir, language string) error {
+	cfg, ok := analyzerConfigs[strings.ToLower(language)]
+	if !ok {
+		return nil
+	}
+	return os.WriteFile(filepath.Join(dir, cfg.name), []byte(cfg.content), 0o600)
 }
 
 // Причины закрытия подключения. Они превращаются в коды закрытия WebSocket (см. closeStatus).

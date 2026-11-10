@@ -124,6 +124,10 @@ func (m *SessionManager) Create(id string, language string) (*Session, error) {
 	if err := os.Mkdir(dir, 0o700); err != nil {
 		return nil, err
 	}
+	if err := writeAnalyzerConfig(dir, language); err != nil {
+		os.RemoveAll(dir)
+		return nil, err
+	}
 	session := &Session{ID: id, Language: language, Dir: dir, Created: time.Now(), Workspace: NewWorkspace(dir, m.conf.Limits, language)}
 	session.Touch()
 	m.sessions[id] = session

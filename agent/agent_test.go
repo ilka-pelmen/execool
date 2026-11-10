@@ -398,7 +398,7 @@ func decodeBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 func createSession(t *testing.T, h *WebHandler, id string) *httptest.ResponseRecorder {
 	t.Helper()
 	body := `{"id":"` + id + `","language":"python"}`
-	return do(h.InternalRoutes(), "POST", "/internal/sessions", body, bearer(testAPIKey))
+	return do(h.InternalRoutes(), "POST", "/sessions", body, bearer(testAPIKey))
 }
 
 func expectStatus(t *testing.T, rec *httptest.ResponseRecorder, status int, code string) {
@@ -417,10 +417,10 @@ func TestInternalAuth(t *testing.T) {
 	h, _ := newTestHandler(t)
 	internal := h.InternalRoutes()
 
-	expectStatus(t, do(internal, "GET", "/internal/status", "", nil), 401, "unauthorized")
-	expectStatus(t, do(internal, "GET", "/internal/status", "", bearer("wrong-key-0123456789")), 401, "unauthorized")
+	expectStatus(t, do(internal, "GET", "/status", "", nil), 401, "unauthorized")
+	expectStatus(t, do(internal, "GET", "/status", "", bearer("wrong-key-0123456789")), 401, "unauthorized")
 
-	rec := do(internal, "GET", "/internal/status", "", bearer(testAPIKey))
+	rec := do(internal, "GET", "/status", "", bearer(testAPIKey))
 	expectStatus(t, rec, 200, "")
 	if got := decodeBody(t, rec)["agentId"]; got != "agent-1" {
 		t.Fatalf("agentId: %v", got)
@@ -451,13 +451,13 @@ func TestCreateSessionValidation(t *testing.T) {
 	internal := h.InternalRoutes()
 	auth := bearer(testAPIKey)
 
-	expectStatus(t, do(internal, "POST", "/internal/sessions", `{"id":"../x","language":"python"}`, auth), 400, "invalid_id")
-	expectStatus(t, do(internal, "POST", "/internal/sessions", `{"id":"s1","language":"cobol"}`, auth), 400, "unsupported_language")
-	expectStatus(t, do(internal, "POST", "/internal/sessions", `{"id":"s1","unknown":1}`, auth), 400, "invalid_request")
-	expectStatus(t, do(internal, "POST", "/internal/sessions", `not json`, auth), 400, "invalid_request")
+	expectStatus(t, do(internal, "POST", "/sessions", `{"id":"../x","language":"python"}`, auth), 400, "invalid_id")
+	expectStatus(t, do(internal, "POST", "/sessions", `{"id":"s1","language":"cobol"}`, auth), 400, "unsupported_language")
+	expectStatus(t, do(internal, "POST", "/sessions", `{"id":"s1","unknown":1}`, auth), 400, "invalid_request")
+	expectStatus(t, do(internal, "POST", "/sessions", `not json`, auth), 400, "invalid_request")
 
 	// Язык по умолчанию: python.
-	expectStatus(t, do(internal, "POST", "/internal/sessions", `{"id":"s2"}`, auth), 201, "")
+	expectStatus(t, do(internal, "POST", "/sessions", `{"id":"s2"}`, auth), 201, "")
 }
 
 func TestCreateSessionCapacityAndIdempotency(t *testing.T) {
@@ -545,8 +545,8 @@ func TestDeleteSession(t *testing.T) {
 	}
 
 	internal := h.InternalRoutes()
-	expectStatus(t, do(internal, "DELETE", "/internal/sessions/s1", "", bearer(testAPIKey)), 204, "")
-	expectStatus(t, do(internal, "DELETE", "/internal/sessions/s1", "", bearer(testAPIKey)), 204, "") // повтор безопасен
+	expectStatus(t, do(internal, "DELETE", "/sessions/s1", "", bearer(testAPIKey)), 204, "")
+	expectStatus(t, do(internal, "DELETE", "/sessions/s1", "", bearer(testAPIKey)), 204, "") // повтор безопасен
 
 	if exists(dir) {
 		t.Fatal("папка сессии должна быть удалена")
@@ -589,7 +589,7 @@ func TestCORS(t *testing.T) {
 	// Внутренний API CORS не получает.
 	headers := bearer(testAPIKey)
 	headers["Origin"] = "http://localhost:5173"
-	rec = do(h.InternalRoutes(), "GET", "/internal/status", "", headers)
+	rec = do(h.InternalRoutes(), "GET", "/status", "", headers)
 	if rec.Header().Get("Access-Control-Allow-Origin") != "" {
 		t.Fatal("внутренний API не должен отдавать заголовки CORS")
 	}
@@ -721,5 +721,114 @@ func TestReapIgnoresMaxLifetimeWhenDisabled(t *testing.T) {
 
 	if n := h.Manager.Reap(); n != 0 {
 		t.Fatalf("удалено сессий: %d, ожидали 0", n)
+	}
+}
+
+func combinedRoutes(h *WebHandler) http.Handler {
+	internal := h.InternalRoutes()
+	public := h.PublicRoutes()
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/internal" || strings.HasPrefix(r.URL.Path, "/internal/") {
+			http.StripPrefix("/internal", internal).ServeHTTP(w, r)
+			return
+		}
+		public.ServeHTTP(w, r)
+	})
+}
+
+func TestInternalAPIIsReachableOnlyUnderPrefix(t *testing.T) {
+	h, _ := newTestHandler(t)
+	routes := combinedRoutes(h)
+	auth := bearer(testAPIKey)
+
+	// Под префиксом /internal и с ключом API внутренний API работает.
+	expectStatus(t, do(routes, "POST", "/internal/sessions", `{"id":"s1","language":"python"}`, auth), 201, "")
+	expectStatus(t, do(routes, "GET", "/internal/status", "", auth), 200, "")
+
+	// Без ключа он закрыт.
+	expectStatus(t, do(routes, "GET", "/internal/status", "", nil), 401, "unauthorized")
+	expectStatus(t, do(routes, "POST", "/internal/sessions", `{"id":"s2","language":"python"}`, nil), 401, "unauthorized")
+
+	// Те же маршруты без префикса на публичной стороне недоступны, даже с верным ключом.
+	for _, target := range []string{"/sessions", "/status"} {
+		method := "POST"
+		if target == "/status" {
+			method = "GET"
+		}
+		rec := do(routes, method, target, `{"id":"s3","language":"python"}`, auth)
+		if rec.Code != 404 && rec.Code != 405 {
+			t.Fatalf("%s %s без префикса: статус %d, ожидали 404 или 405", method, target, rec.Code)
+		}
+	}
+
+	// И ничего не создали: s2 (без ключа) и s3 (без префикса) не существуют.
+	for _, id := range []string{"s2", "s3"} {
+		if _, err := h.Manager.Get(id); err == nil {
+			t.Fatalf("сессия %s не должна существовать", id)
+		}
+	}
+}
+
+func TestCreateSessionWritesAnalyzerConfig(t *testing.T) {
+	h, _ := newTestHandler(t)
+	createSession(t, h, "s1")
+
+	session, err := h.Manager.Get("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	data, err := os.ReadFile(filepath.Join(session.Dir, "pyrefly.toml"))
+	if err != nil {
+		t.Fatalf("конфигурация не создана: %v", err)
+	}
+	for _, want := range []string{`search-path = ["."]`, "disable-search-path-heuristics = true"} {
+		if !strings.Contains(string(data), want) {
+			t.Fatalf("в конфигурации нет %q: %s", want, data)
+		}
+	}
+
+	// Служебный файл не считается файлом проекта.
+	if n := session.Workspace.FileCount(); n != 0 {
+		t.Fatalf("файлов проекта: %d, ожидали 0", n)
+	}
+}
+
+func TestProjectCannotOverrideAnalyzerConfig(t *testing.T) {
+	h, _ := newTestHandler(t)
+	createSession(t, h, "s1")
+
+	rec := do(h.PublicRoutes(), "PUT", "/sessions/s1/file?path=pyrefly.toml",
+		`search-path = ["/"]`, bearer(filesToken("s1")))
+	if rec.Code >= 300 {
+		t.Fatalf("статус: %d, %s", rec.Code, rec.Body.String())
+	}
+
+	session, err := h.Manager.Get("s1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(session.Dir, "pyrefly.toml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "disable-search-path-heuristics = true") || strings.Contains(string(data), `"/"`) {
+		t.Fatalf("конфигурацию агента подменил проект: %s", data)
+	}
+}
+
+func TestWriteAnalyzerConfigSkipsUnknownLanguage(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := writeAnalyzerConfig(dir, "cobol"); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("для неизвестного языка создан файл: %v", entries)
 	}
 }

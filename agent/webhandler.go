@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -86,6 +88,26 @@ func bearerToken(header string) (string, bool) {
 
 func (h *WebHandler) internalAuth(next handlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Сначала адрес отправителя (пустой список - без ограничения).
+		if len(h.Config.InternalAllowed) > 0 {
+			allowed := false
+			if addrPort, err := netip.ParseAddrPort(r.RemoteAddr); err == nil {
+				addr := addrPort.Addr().Unmap() // ::ffff:10.0.0.5 сравниваем как 10.0.0.5
+				for _, prefix := range h.Config.InternalAllowed {
+					if prefix.Contains(addr) {
+						allowed = true
+						break
+					}
+				}
+			}
+			if !allowed {
+				log.Printf("[Internal] denied %s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+				writeAPIError(w, errUnauthorized)
+				return
+			}
+		}
+
+		// Потом ключ API.
 		key, ok := bearerToken(r.Header.Get("Authorization"))
 		if !ok || !verifyAgentAPIKey(h.Config.APIKey, "Bearer "+key) {
 			writeAPIError(w, errUnauthorized)
