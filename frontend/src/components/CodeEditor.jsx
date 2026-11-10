@@ -9,11 +9,10 @@ const LANGUAGES = {
   md: "markdown",
 };
 
-const DARK_THEME = "execool-black";
-const LIGHT_THEME = "execool-light";
+const THEME = "execool-black";
 
 function defineTheme(monaco) {
-  monaco.editor.defineTheme(DARK_THEME, {
+  monaco.editor.defineTheme(THEME, {
     base: "vs-dark",
     inherit: true,
     rules: [],
@@ -37,35 +36,9 @@ function defineTheme(monaco) {
       "scrollbarSlider.activeBackground": "#ffffff4d",
     },
   });
-
-  monaco.editor.defineTheme(LIGHT_THEME, {
-    base: "vs",
-    inherit: true,
-    rules: [],
-    colors: {
-      "editor.background": "#ffffff",
-      "editor.foreground": "#1f2937",
-      "editorGutter.background": "#f5f6f8",
-      "editor.lineHighlightBackground": "#f1f5f9",
-      "editor.lineHighlightBorder": "#00000000",
-      "editor.selectionBackground": "#c7d2fe",
-      "editor.inactiveSelectionBackground": "#e2e8f0",
-      "editorLineNumber.foreground": "#94a3b8",
-      "editorLineNumber.activeForeground": "#334155",
-      "editorCursor.foreground": "#111827",
-      "editorIndentGuide.background1": "#e2e8f0",
-      "editorIndentGuide.activeBackground1": "#cbd5e1",
-      "editorWidget.background": "#ffffff",
-      "editorWidget.border": "#cbd5e1",
-      "scrollbarSlider.background": "#0000001a",
-      "scrollbarSlider.hoverBackground": "#00000033",
-      "scrollbarSlider.activeBackground": "#0000004d",
-    },
-  });
 }
 
 export default function CodeEditor({
-  theme = "dark",
   filePath,
   value,
   onChange,
@@ -95,7 +68,7 @@ export default function CodeEditor({
         <Editor
           height="100%"
           language={language}
-          theme={theme === "light" ? LIGHT_THEME : DARK_THEME}
+          theme={THEME}
           beforeMount={defineTheme}
           value={value}
           onChange={(nextValue) => onChange(nextValue ?? "")}

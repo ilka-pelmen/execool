@@ -28,15 +28,6 @@ const INITIAL_FILES = [
 ];
 
 export default function App() {
-  const [theme, setTheme] = useState(() => {
-    try {
-      return window.localStorage.getItem("execool-theme") === "light"
-        ? "light"
-        : "dark";
-    } catch {
-      return "dark";
-    }
-  });
   const [files, setFiles] = useState(INITIAL_FILES);
   const [activeFile, setActiveFile] = useState("main.py");
 
@@ -69,15 +60,6 @@ export default function App() {
       }
     };
   }, []);
-
-  useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    try {
-      window.localStorage.setItem("execool-theme", theme);
-    } catch {
-      // Theme still works for this session when storage is unavailable.
-    }
-  }, [theme]);
 
   // Закрываем сессию при закрытии вкладки, чтобы контейнеры не копились.
   useEffect(() => {
@@ -312,10 +294,6 @@ export default function App() {
     <main className="ide">
       <TopBar
         projectName={PROJECT_NAME}
-        theme={theme}
-        onToggleTheme={() =>
-          setTheme((current) => (current === "dark" ? "light" : "dark"))
-        }
         status={status}
         sessionReady={Boolean(sessionId)}
         running={running}
@@ -337,7 +315,6 @@ export default function App() {
 
         {activeFileData ? (
           <CodeEditor
-            theme={theme}
             filePath={activeFileData.path}
             value={activeFileData.content}
             onChange={(value) => updateFile(activeFileData.path, value)}
