@@ -25,6 +25,13 @@ const MAX_LINES = 2000; // сколько строк вывода держим �
 const LSP_LANGUAGE = "python";
 
 export default function App() {
+  const [theme, setTheme] = useState(() => {
+    try {
+      return localStorage.getItem("execool:theme") === "light" ? "light" : "dark";
+    } catch {
+      return "dark";
+    }
+  });
   const [project, setProject] = useState(null);
   const [saved, setSaved] = useState(() => loadProject());
   const [activeFile, setActiveFile] = useState(null);
@@ -41,6 +48,15 @@ export default function App() {
   const flushRef = useRef(null);
 
   projectRef.current = project;
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    try {
+      localStorage.setItem("execool:theme", theme);
+    } catch {
+      // Тема сохранится только на время текущей вкладки.
+    }
+  }, [theme]);
 
   const files = project?.files ?? [];
   const activeFileData =
@@ -243,6 +259,8 @@ export default function App() {
   return (
     <main className="ide">
       <TopBar
+        theme={theme}
+        onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")}
         projectName={project.name}
         typeName={projectType?.name ?? project.type}
         runtimeStatus={runtimeStatus}
@@ -275,6 +293,7 @@ export default function App() {
             onChange={(value) => updateFile(activeFileData.path, value)}
             lspClient={lsp.client}
             lspRootUri={lsp.rootUri}
+            theme={theme}
           />
         ) : (
           <div className="editor-panel editor-empty">

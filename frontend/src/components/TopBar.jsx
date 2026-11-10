@@ -28,6 +28,8 @@ const LSP_HINT =
   "При включении код проекта отправляется на сервер.";
 
 export default function TopBar({
+  theme,
+  onToggleTheme,
   projectName,
   typeName,
   runtimeStatus,
@@ -53,6 +55,17 @@ export default function TopBar({
       </div>
 
       <div className="topbar-right">
+        <button
+          type="button"
+          className="button theme-toggle"
+          onClick={onToggleTheme}
+          aria-label={theme === "dark" ? "Включить светлую тему" : "Включить тёмную тему"}
+          title={theme === "dark" ? "Светлая тема" : "Тёмная тема"}
+        >
+          <span aria-hidden="true">{theme === "dark" ? "☀" : "☾"}</span>
+          {theme === "dark" ? "Светлая" : "Тёмная"}
+        </button>
+
         <div className="lsp-toggle">
           <button
             type="button"

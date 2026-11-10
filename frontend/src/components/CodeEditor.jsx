@@ -4,7 +4,7 @@ import { basicSetup } from "codemirror";
 import { Annotation, Compartment, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentMore, indentLess } from "@codemirror/commands"; // Добавили отступы
-import { foldGutter, syntaxHighlighting } from "@codemirror/language";
+import { defaultHighlightStyle, foldGutter, syntaxHighlighting } from "@codemirror/language";
 import { lintGutter, setDiagnostics } from "@codemirror/lint";
 import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 
@@ -24,12 +24,12 @@ function languageFor(path) {
   return factory ? factory() : [];
 }
 
-const blackTheme = EditorView.theme(
+const editorTheme = (light) => EditorView.theme(
   {
     "&": {
       height: "100%",
-      backgroundColor: "#010101",
-      color: "#ededed",
+      backgroundColor: "var(--editor-bg)",
+      color: "var(--text)",
       fontSize: "15px",
     },
     "&.cm-focused": { outline: "none" },
@@ -39,14 +39,14 @@ const blackTheme = EditorView.theme(
     },
     ".cm-content": { 
       padding: "0", 
-      caretColor: "#ffffff", 
+      caretColor: "var(--text)",
       outline: "none" 
     },
 
-    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "#ffffff" },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--text)" },
     ".cm-gutters": {
-      backgroundColor: "#020202",
-      color: "#4a4a4a",
+      backgroundColor: "var(--editor-gutter)",
+      color: "var(--faint)",
       border: "none",
     },
     ".cm-gutter-lint": { width: "0.1em" },
@@ -56,47 +56,48 @@ const blackTheme = EditorView.theme(
     
     /* Делаем активную строку полупрозрачной, чтобы выделение под ней было видно */
     ".cm-activeLine": { 
-      backgroundColor: "rgba(25, 25, 25, 0.6)" 
+      backgroundColor: "var(--editor-active)"
     },
     ".cm-activeLineGutter": { 
-      backgroundColor: "#111111", 
-      color: "#bdbdbd" 
+      backgroundColor: "var(--selected)",
+      color: "var(--text)"
     },
     
     /* Цвет и видимость выделения */
     ".cm-selectionBackground, &.cm-focused .cm-selectionBackground": {
-      backgroundColor: "#343434 !important",
+      backgroundColor: "var(--editor-selection) !important",
     },
     
-    ".cm-selectionMatch": { backgroundColor: "#1f1f1f" },
+    ".cm-selectionMatch": { backgroundColor: "var(--selected)" },
     "&.cm-focused .cm-matchingBracket": {
-      backgroundColor: "#2a2a2a",
-      outline: "1px solid #333333",
+      backgroundColor: "var(--selected)",
+      outline: "1px solid var(--line-strong)",
     },
     ".cm-tooltip": {
-      backgroundColor: "#0a0a0a",
-      border: "1px solid #333333",
-      color: "#ededed",
+      backgroundColor: "var(--editor-tooltip)",
+      border: "1px solid var(--line-strong)",
+      color: "var(--text)",
     },
     ".cm-panels": {
-      backgroundColor: "#0a0a0a",
-      color: "#ededed",
-      borderColor: "#333333",
+      backgroundColor: "var(--editor-tooltip)",
+      color: "var(--text)",
+      borderColor: "var(--line-strong)",
     },
     ".cm-scroller::-webkit-scrollbar": { width: "10px", height: "10px" },
     ".cm-scroller::-webkit-scrollbar-track": { background: "transparent" },
     ".cm-scroller::-webkit-scrollbar-thumb": {
-      background: "#ffffff1a",
+      background: "color-mix(in srgb, var(--text) 12%, transparent)",
       borderRadius: "5px",
     },
-    ".cm-scroller::-webkit-scrollbar-thumb:hover": { background: "#ffffff33" },
-    ".cm-scroller::-webkit-scrollbar-thumb:active": { background: "#ffffff4d" },
+    ".cm-scroller::-webkit-scrollbar-thumb:hover": { background: "color-mix(in srgb, var(--text) 22%, transparent)" },
+    ".cm-scroller::-webkit-scrollbar-thumb:active": { background: "color-mix(in srgb, var(--text) 32%, transparent)" },
   },
-  { dark: true }
+  { dark: !light }
 );
 
 const editableCompartment = new Compartment();
 const lspCompartment = new Compartment();
+const themeCompartment = new Compartment();
 const externalChange = Annotation.define();
 
 // Подсказки языкового сервера: расширение привязано к URI файла на агенте.
@@ -146,6 +147,7 @@ export default function CodeEditor({
   issues, // диагностика не от LSP; при включённых подсказках не передавать
   lspClient = null,
   lspRootUri = null,
+  theme = "dark",
 }) {
   const hostRef = useRef(null);
   const viewRef = useRef(null);
@@ -178,8 +180,10 @@ export default function CodeEditor({
           },
         ]),
         languageFor(path),
-        blackTheme,
-        syntaxHighlighting(oneDarkHighlightStyle),
+        themeCompartment.of([
+          editorTheme(theme === "light"),
+          syntaxHighlighting(theme === "light" ? defaultHighlightStyle : oneDarkHighlightStyle),
+        ]),
         editableCompartment.of(editableExtensions(readOnly)),
         lspCompartment.of(lspExtensions(client, rootUri, path)),
         EditorView.updateListener.of((update) => {
@@ -231,6 +235,15 @@ export default function CodeEditor({
       effects: editableCompartment.reconfigure(editableExtensions(readOnly)),
     });
   }, [readOnly]);
+
+  useEffect(() => {
+    viewRef.current?.dispatch({
+      effects: themeCompartment.reconfigure([
+        editorTheme(theme === "light"),
+        syntaxHighlighting(theme === "light" ? defaultHighlightStyle : oneDarkHighlightStyle),
+      ]),
+    });
+  }, [theme]);
 
   // Клиент LSP появился, пропал или заменился (переподключение): меняем расширение.
   // При смене файла состояние собирается заново в createState, этот эффект тогда ничего не делает.

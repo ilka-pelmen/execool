@@ -143,6 +143,10 @@
   opacity: 1;
 }
 
+:root[data-theme="light"] .wasm-badge::after {
+  background: #fff;
+}
+
 /* Верхняя панель и вывод */
 
 .brand-project {
