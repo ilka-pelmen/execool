@@ -1,9 +1,10 @@
-# Контекст сборки - корень репозитория, поэтому исключаем лишнее отсюда.
+# Образы собираются из корня репозитория (docker/*.Dockerfile),
+# поэтому здесь исключено только то, что собирается внутри образа заново.
 .git
-agent
 **/node_modules
 **/target
 **/dist
 **/.idea
 **/.vscode
-backend/HELP.md
+frontend/public
+backend/src/main/resources/static

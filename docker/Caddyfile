@@ -1,0 +1,20 @@
+# Единая точка входа для образа all-in-one: один порт вместо двух.
+#   /        и /api/*  -> бэкенд (он же отдаёт фронтенд)
+#   /agent/* (без /agent/internal) -> агент, включая WebSocket языкового сервера
+{
+	admin off
+}
+
+:{$PROXY_PORT:8080} {
+	route {
+		# Внутренний API агента наружу не отдаём. Через прокси он выглядел бы запросом
+		# с 127.0.0.1 и проходил бы проверку по адресу (AGENT_INTERNAL_ALLOWED).
+		respond /agent/internal* 404
+
+		handle_path /agent/* {
+			reverse_proxy 127.0.0.1:6721
+		}
+
+		reverse_proxy 127.0.0.1:6767
+	}
+}

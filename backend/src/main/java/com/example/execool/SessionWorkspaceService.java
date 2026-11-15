@@ -16,7 +16,7 @@ public class SessionWorkspaceService {
 
     public SessionWorkspaceService(
             RestTemplate restTemplate,
-            @Value("${app.agent.url}") String agentUrl,
+            @Value("${app.agent.internal-url}") String agentUrl,
             @Value("${app.agent.api-key}") String agentApiKey) {
         this.restTemplate = restTemplate;
         this.agentUrl = agentUrl.replaceAll("/+$", "");

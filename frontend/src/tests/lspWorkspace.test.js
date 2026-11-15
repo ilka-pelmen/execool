@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createWorkspaceClass, projectPathFromUri } from "./lspWorkspace.js";
+import { createWorkspaceClass, projectPathFromUri } from "../services/lspWorkspace.js";
 
 const ROOT = "file:///workspace";
 

@@ -3,7 +3,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { ApiError, agentInfo, startLspSession } from "./api.js";
+import { ApiError, agentInfo, startLspSession } from "../services/api.js";
 
 const conn = { agentUrl: "http://agent", sessionId: "s1", filesToken: "T" };
 

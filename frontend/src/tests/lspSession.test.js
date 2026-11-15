@@ -4,7 +4,7 @@
 import test, { afterEach } from "node:test";
 import assert from "node:assert/strict";
 
-import { LspSession } from "./lspSession.js";
+import { LspSession } from "../services/lspSession.js";
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
