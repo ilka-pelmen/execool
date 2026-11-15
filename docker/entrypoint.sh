@@ -1,49 +1,32 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# Запускает агента, бэкенд и прокси в одном контейнере.
+# Если один из процессов завершился, останавливаем остальные и выходим с тем же кодом:
+# контейнер должен упасть целиком, а не работать наполовину.
+set -u
+
+pids=()
 
 stop_all() {
-  kill $(jobs -p) 2>/dev/null
-  wait 2>/dev/null
+  for pid in "${pids[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  wait 2>/dev/null || true
 }
 
+# docker stop присылает SIGTERM процессу с PID 1: передаём его дочерним процессам.
 trap 'stop_all; exit 143' TERM INT
 
-# Ждём, пока порт начнёт принимать соединения.
-# Если процесс умер раньше, завершаем всё и выходим с ошибкой.
-wait_port() {
-  local port=$1 name=$2 pid=$3 timeout=${4:-180}
-  local i=0
-  until (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; do
-    if ! kill -0 "$pid" 2>/dev/null; then
-      echo "$name завершился до готовности" >&2
-      stop_all
-      exit 1
-    fi
-    i=$((i + 1))
-    if [ "$i" -ge "$timeout" ]; then
-      echo "$name не открыл порт $port за ${timeout}с" >&2
-      stop_all
-      exit 1
-    fi
-    sleep 1
-  done
-  echo "$name готов на порту $port"
-}
-
 execool-agent &
-AGENT_PID=$!
+pids+=($!)
 
+# Память делится между процессами, поэтому Java получает меньше, чем в отдельном образе.
 java -XX:MaxRAMPercentage=50 -jar /app/app.jar &
-JAVA_PID=$!
+pids+=($!)
 
-wait_port "${AGENT_PORT:-6721}" agent "$AGENT_PID"
-wait_port "${SERVER_PORT:-6767}" backend "$JAVA_PID" 300
+caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
+pids+=($!)
 
-caddy run &
-CADDY_PID=$!
-
-# Дальше остаётся ваша логика: если любой процесс завершился, останавливаем остальные.
 wait -n
 status=$?
-echo "entrypoint: один из процессов завершился с кодом $status" >&2
 stop_all
-exit $status
+exit "$status"
