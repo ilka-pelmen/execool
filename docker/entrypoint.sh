@@ -20,8 +20,22 @@ execool-agent &
 pids+=($!)
 
 # Память делится между процессами, поэтому Java получает меньше, чем в отдельном образе.
-java -XX:MaxRAMPercentage=50 -jar /app/app.jar &
+java -XX:ActiveProcessorCount=1 -XX:MaxRAMPercentage=50 -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -jar /app/app.jar &
 pids+=($!)
+
+java -XX:ActiveProcessorCount=1 -XX:MaxRAMPercentage=50 -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -jar /app/app.jar &
+java_pid=$!
+pids+=("$java_pid")
+
+# Ждем, пока Джава откроется
+until (exec 3<>/dev/tcp/127.0.0.1/6767) 2>/dev/null; do
+  if ! kill -0 "$java_pid" 2>/dev/null; then
+    echo "backend завершился до готовности" >&2
+    stop_all
+    exit 1
+  fi
+  sleep 1
+done
 
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 pids+=($!)
