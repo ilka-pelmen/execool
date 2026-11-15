@@ -27,10 +27,11 @@ java -XX:ActiveProcessorCount=1 -XX:MaxRAMPercentage=50 -XX:+UseSerialGC -XX:Tie
 java_pid=$!
 pids+=("$java_pid")
 
-# Ждем, пока Джава откроется
+# Ждем, пока бэкенд откроется
+deadline=$((SECONDS + 180))
 until (exec 3<>/dev/tcp/127.0.0.1/6767) 2>/dev/null; do
-  if ! kill -0 "$java_pid" 2>/dev/null; then
-    echo "backend завершился до готовности" >&2
+  if ! kill -0 "$java_pid" 2>/dev/null || [ "$SECONDS" -ge "$deadline" ]; then
+    echo "backend не готов за отведённое время" >&2
     stop_all
     exit 1
   fi
