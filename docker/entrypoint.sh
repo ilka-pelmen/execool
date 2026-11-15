@@ -14,7 +14,7 @@ stop_all() {
 }
 
 # docker stop присылает SIGTERM процессу с PID 1: передаём его дочерним процессам.
-trap 'stop_all; exit 143' TERM INT
+trap 'echo "[entrypoint] получен SIGTERM извне, останавливаю процессы" >&2; stop_all; exit 143' TERM INT
 
 execool-agent &
 pids+=($!)
@@ -26,7 +26,7 @@ pids+=("$java_pid")
 
 # Ждем, пока бэкенд откроется
 deadline=$((SECONDS + 180))
-until (exec 3<>/dev/tcp/127.0.0.1/6767) 2>/dev/null; do
+until (exec 3<>/dev/tcp/127.0.0.1/6721) 2>/dev/null && (exec 3<>/dev/tcp/127.0.0.1/6767) 2>/dev/null; do
   if ! kill -0 "$java_pid" 2>/dev/null || [ "$SECONDS" -ge "$deadline" ]; then
     echo "backend не готов за отведённое время" >&2
     stop_all
@@ -38,7 +38,8 @@ done
 caddy run --config /etc/caddy/Caddyfile --adapter caddyfile &
 pids+=($!)
 
-wait -n
+wait -n -p exited_pid
 status=$?
+echo "[entrypoint] завершился PID $exited_pid с кодом $status" >&2
 stop_all
 exit "$status"
