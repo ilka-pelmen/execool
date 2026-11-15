@@ -21,9 +21,6 @@ pids+=($!)
 
 # Память делится между процессами, поэтому Java получает меньше, чем в отдельном образе.
 java -XX:ActiveProcessorCount=1 -XX:MaxRAMPercentage=50 -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -jar /app/app.jar &
-pids+=($!)
-
-java -XX:ActiveProcessorCount=1 -XX:MaxRAMPercentage=50 -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -jar /app/app.jar &
 java_pid=$!
 pids+=("$java_pid")
 
