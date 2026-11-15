@@ -26,7 +26,7 @@ pids+=("$java_pid")
 
 # Ждем, пока бэкенд откроется
 deadline=$((SECONDS + 180))
-until (exec 3<>/dev/tcp/127.0.0.1/6721) 2>/dev/null && curl -fsS -o /dev/null http://127.0.0.1:6767/ping; do
+until (exec 3<>/dev/tcp/127.0.0.1/6721) 2>/dev/null && curl -fs -o /dev/null http://127.0.0.1:6767/ping 2>/dev/null; do
   if ! kill -0 "$java_pid" 2>/dev/null || [ "$SECONDS" -ge "$deadline" ]; then
     echo "backend не готов за отведённое время" >&2
     stop_all
