@@ -65,6 +65,9 @@ FROM docker.io/library/ibm-semeru-runtimes:open-17-jre-noble AS java
 # 7. Запуск: образ с Python (нужен окружению Pyrefly) плюс Java для бэкенда
 FROM docker.io/library/python:3.13-slim
 RUN useradd --system --create-home --home-dir /home/execool execool
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=java /opt/java/openjdk /opt/java/openjdk
 COPY --from=pyrefly /opt/pyrefly /opt/pyrefly
