@@ -1,175 +1,207 @@
 package com.example.execool;
 
+import com.fasterxml.jackson.annotation.JsonProperty;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import org.springframework.web.client.RestTemplate;
+import org.springframework.web.client.RestClientException;
+import org.springframework.web.client.RestClientResponseException;
+import org.springframework.web.util.UriComponentsBuilder;
 
-import java.util.List;
+import java.net.URI;
 import java.util.Map;
-
-import jakarta.annotation.PostConstruct;
+import java.util.UUID;
 
 @RestController
 @RequestMapping("/api/sessions")
 public class SessionController {
 
+    private static final Logger log = LoggerFactory.getLogger(SessionController.class);
+    private static final String DEFAULT_LANGUAGE = "python";
+
     private final SessionWorkspaceService workspaceService;
-    private final RestTemplate restTemplate;
+    private final AgentTokenService tokenService;
+    private final String agentPublicUrl;
 
-    @Value("${app.agent.url}")
-    private String agentBaseUrl;
-
-    public SessionController(SessionWorkspaceService workspaceService, RestTemplate restTemplate) {
+    public SessionController(
+            SessionWorkspaceService workspaceService,
+            AgentTokenService tokenService,
+            @Value("${app.agent.url}") String agentPublicUrl) {
         this.workspaceService = workspaceService;
-        this.restTemplate = restTemplate;
+        this.tokenService = tokenService;
+        this.agentPublicUrl = agentPublicUrl.replaceAll("/+$", "");
     }
 
-    @PostConstruct
-    public void verifyAgentConnection() {
+    public record StartLspRequest(
+            @JsonProperty("language_id") String languageId) {}
+
+    /** Данные для подключения к языковому серверу. Билет одноразовый и короткоживущий. */
+    public record LspInfo(
+            @JsonProperty("websocket_url") String websocketUrl,
+            String ticket,
+            @JsonProperty("expires_in_seconds") long expiresInSeconds) {}
+
+    public record StartLspResponse(
+            @JsonProperty("session_id") String sessionId,
+            String language,
+            @JsonProperty("root_uri") String rootUri,
+            AgentSession.AgentLimits limits,
+            @JsonProperty("agent_url") String agentUrl,
+            @JsonProperty("files_token") String filesToken,
+            @JsonProperty("files_token_expires_in_seconds") long filesTokenExpiresInSeconds,
+            LspInfo lsp) {}
+
+    /**
+     * Создаёт сессию на агенте и сразу выдаёт всё, что нужно браузеру:
+     * адрес агента, токен для файлов и билет для WebSocket.
+     */
+    @PostMapping("/start-lsp")
+    public ResponseEntity<?> startLsp(
+            @RequestBody(required = false) StartLspRequest request) {
+        String language = request == null || isBlank(request.languageId())
+                ? DEFAULT_LANGUAGE
+                : request.languageId().trim();
+
+        String id = UUID.randomUUID().toString();
+
         try {
-            restTemplate.getForEntity(agentBaseUrl + "/ping", Void.class);
-            System.out.println("[Agent Check] Successfully connected to Go agent at: " + agentBaseUrl);
-        } catch (Exception e) {
-            System.err.println("[Agent Warning] Go agent at [" + agentBaseUrl + "] is not reachable yet. Requests will fail until it is up.");
+            AgentSession session = workspaceService.createSession(id, language);
+
+            AgentTokenService.IssuedToken filesToken = tokenService.issueFilesToken(session.id());
+
+            return ResponseEntity.status(HttpStatus.CREATED).body(
+                    new StartLspResponse(
+                            session.id(),
+                            session.language(),
+                            session.rootUri(),
+                            session.limits(),
+                            agentPublicUrl,
+                            filesToken.token(),
+                            filesToken.expiresInSeconds(),
+                            buildLspInfo(session.id())
+                    )
+            );
+        } catch (RestClientResponseException e) {
+            return agentFailure(e);
+        } catch (RestClientException e) {
+            return agentUnavailable(e);
         }
     }
 
-    private boolean isInvalid(String value) {
+    /** Новый билет для переподключения (билет одноразовый). */
+    @PostMapping("/{id}/lsp-ticket")
+    public ResponseEntity<?> renewLspTicket(@PathVariable String id) {
+        if (!isValidSessionId(id)) {
+            return invalidId();
+        }
+        return ResponseEntity.ok(buildLspInfo(id));
+    }
+
+    @PostMapping("/{id}/files-token")
+    public ResponseEntity<?> renewFilesToken(@PathVariable String id) {
+        if (!isValidSessionId(id)) {
+            return invalidId();
+        }
+
+        AgentTokenService.IssuedToken token = tokenService.issueFilesToken(id);
+        return ResponseEntity.ok(Map.of(
+                "files_token", token.token(),
+                "files_token_expires_in_seconds", token.expiresInSeconds()
+        ));
+    }
+
+    @DeleteMapping("/{id}")
+    public ResponseEntity<?> delete(@PathVariable String id) {
+        if (!isValidSessionId(id)) {
+            return invalidId();
+        }
+
+        try {
+            workspaceService.deleteSession(id);
+            return ResponseEntity.noContent().build();
+        } catch (RestClientResponseException e) {
+            return agentFailure(e);
+        } catch (RestClientException e) {
+            return agentUnavailable(e);
+        }
+    }
+
+    // ---- вспомогательное ----
+
+    private LspInfo buildLspInfo(String sessionId) {
+        AgentTokenService.IssuedToken ticket = tokenService.issueLspTicket(sessionId);
+
+        URI publicUri = URI.create(agentPublicUrl);
+        String wsScheme = "https".equalsIgnoreCase(publicUri.getScheme()) ? "wss" : "ws";
+
+        String websocketUrl = UriComponentsBuilder
+                .fromUriString(agentPublicUrl)
+                .scheme(wsScheme)
+                .pathSegment("sessions", sessionId, "lsp")
+                .queryParam("ticket", ticket.token())
+                .build()
+                .encode()
+                .toUriString();
+
+        return new LspInfo(websocketUrl, ticket.token(), ticket.expiresInSeconds());
+    }
+
+    /**
+     * Ответы агента про запрос клиента (400 неверный язык или id, 503 агент занят)
+     * отдаём как есть: тело агента уже JSON с полями error и message.
+     * Всё остальное (401 из-за ключа API, 404, 5xx) - проблема между Spring и агентом,
+     * браузеру она не принадлежит: логируем и отвечаем 502.
+     */
+    private ResponseEntity<?> agentFailure(RestClientResponseException e) {
+        int status = e.getStatusCode().value();
+        String body = e.getResponseBodyAsString();
+
+        if ((status == 400 || status == 503) && body != null && !body.isBlank()) {
+            return ResponseEntity.status(status)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(body);
+        }
+
+        log.error("Agent returned {}: {}", status, body);
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
+                "error", "agent_error",
+                "message", "Агент вернул непредвиденную ошибку"
+        ));
+    }
+
+    private ResponseEntity<?> agentUnavailable(RestClientException e) {
+        log.error("Agent is unreachable", e);
+        return ResponseEntity.status(HttpStatus.BAD_GATEWAY).body(Map.of(
+                "error", "agent_unavailable",
+                "message", "Не удалось связаться с агентом"
+        ));
+    }
+
+    private static ResponseEntity<?> invalidId() {
+        return ResponseEntity.badRequest().body(Map.of(
+                "error", "invalid_id",
+                "message", "Некорректный идентификатор сессии"
+        ));
+    }
+
+    private static boolean isBlank(String value) {
         return value == null || value.isBlank();
     }
 
-    @PostMapping("/start")
-    public ResponseEntity<Map<String, Object>> startSession(@RequestBody Map<String, String> request) {
-        String projectId = request != null ? request.get("project_id") : null;
-        String userId = request != null ? request.get("user_id") : null;
-
-        if (isInvalid(projectId) || isInvalid(userId)) {
-            return ResponseEntity.badRequest().body(Map.of(
-                    "error", "Параметры project_id и user_id обязательны и не должны быть пустыми"
-            ));
-        }
-
-        String sessionId = workspaceService.createSessionWorkspace(projectId, userId);
-        if (sessionId == null) {
-            return ResponseEntity.internalServerError().body(Map.of(
-                    "error", "Не удалось инициализировать рабочее пространство сессии"
-            ));
-        }
-
-        return ResponseEntity.ok(Map.of(
-                "session_id", sessionId,
-                "status", "ready",
-                "message", "Сессия и фоновый контейнер успешно инициализированы"
-        ));
-    }
-
-    // Получение списка файлов проекта
-    @GetMapping("/{sessionId}/files")
-    public ResponseEntity<?> getProjectFiles(@PathVariable String sessionId) {
-        List<String> files = workspaceService.listFiles(sessionId);
-        return ResponseEntity.ok(Map.of("files", files));
-    }
-
-    // Получение содержимого конкретного файла
-    @GetMapping("/{sessionId}/file")
-    public ResponseEntity<?> getFileContent(
-            @PathVariable String sessionId,
-            @RequestParam("path") String filePath) {
-        String content = workspaceService.getFileContent(sessionId, filePath);
-        
-        if (content == null) {
-            return ResponseEntity.status(404).body(Map.of("error", "Файл не найден или путь недопустим"));
-        }
-
-        return ResponseEntity.ok(Map.of(
-                "file_path", filePath,
-                "content", content
-        ));
-    }
-
-    // Сохранение файлов проекта
-    @PutMapping("/{sessionId}/file")
-    public ResponseEntity<Map<String, Object>> saveFile(
-            @PathVariable String sessionId,
-            @RequestBody Map<String, String> request) {
-        String filePath = request != null ? request.get("file_path") : null;
-        String content = request != null ? request.get("content") : null;
-
-        if (filePath == null || filePath.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Параметр file_path обязателен"));
-        }
-
-        boolean success = workspaceService.saveFile(sessionId, filePath, content);
-
-        if (!success) {
-            return ResponseEntity.status(400).body(Map.of("error", "Не удалось сохранить файл (ошибка пути или записи)"));
-        }
-
-        return ResponseEntity.ok(Map.of("status", "saved"));
-    }
-
-    // Удаление файлов проекта
-    @DeleteMapping("/{sessionId}/file")
-    public ResponseEntity<Map<String, Object>> deleteFile(
-            @PathVariable String sessionId,
-            @RequestParam("path") String filePath) {
-        if (filePath == null || filePath.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Параметр path обязателен"));
-        }
-
-        boolean success = workspaceService.deleteFile(sessionId, filePath);
-
-        if (!success) {
-            return ResponseEntity.status(404).body(Map.of("error", "Не удалось удалить файл (файл не найден или ошибка пути)"));
-        }
-
-        return ResponseEntity.ok(Map.of(
-                "status", "deleted",
-                "file_path", filePath
-        ));
-    }
-
-    // Запуск кода через существующий контейнер сессии
-    @PostMapping("/{sessionId}/run")
-    public ResponseEntity<Map<String, Object>> runCode(
-            @PathVariable String sessionId,
-            @RequestBody Map<String, String> request) {
-        
-        if (!workspaceService.sessionExists(sessionId)) {
-            return ResponseEntity.status(404).body(Map.of(
-                    "error", "SESSION_EXPIRED",
-                    "message", "Сессия не найдена или истекла"
-            ));
-        }
-
-        String command = request != null ? request.get("command") : null;
-        if (command == null || command.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("error", "Параметр command обязателен"));
+    private static boolean isValidSessionId(String id) {
+        if (id == null) {
+            return false;
         }
 
         try {
-            String agentUrl = agentBaseUrl + "/session/" + sessionId + "/run";
-            Map<String, String> agentRequest = Map.of("command", command);
-
-            ResponseEntity<Map> agentResponse = restTemplate.postForEntity(agentUrl, agentRequest, Map.class);
-            return ResponseEntity.ok(agentResponse.getBody());
-
-        } catch (Exception e) {
-            return ResponseEntity.status(500).body(Map.of(
-                    "error", "Ошибка выполнения кода в агенте: " + e.getMessage()
-            ));
+            UUID.fromString(id);
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
         }
-    }
-
-    // Закрытие сессии
-    @DeleteMapping("/{sessionId}")
-    public ResponseEntity<Map<String, Object>> stopSession(@PathVariable String sessionId) {
-        workspaceService.deleteSessionWorkspace(sessionId);
-        
-        return ResponseEntity.ok(Map.of(
-                "session_id", sessionId,
-                "status", "terminated"
-        ));
     }
 }

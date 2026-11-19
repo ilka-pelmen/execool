@@ -1,10 +1,19 @@
+import { useEffect, useRef } from "preact/hooks";
+
 const SAVE_LABELS = {
-  saving: "Сохранение…",
-  saved: "Все изменения сохранены",
-  error: "Ошибка сохранения",
+  unsaved: "Не сохранено",
+  saved: "Сохранено в браузере",
+  error: "Не удалось сохранить",
 };
 
-export default function Terminal({ output, exitCode, running, saveStatus }) {
+export default function Terminal({ lines, exitCode, running, saveStatus }) {
+  const outputRef = useRef(null);
+
+  useEffect(() => {
+    const element = outputRef.current;
+    if (element) element.scrollTop = element.scrollHeight;
+  }, [lines]);
+
   return (
     <section className="terminal">
       <div className="terminal-header">
@@ -25,7 +34,17 @@ export default function Terminal({ output, exitCode, running, saveStatus }) {
         </div>
       </div>
 
-      <pre className="terminal-output">{output}</pre>
+      <pre className="terminal-output" ref={outputRef}>
+        {lines.length === 0 && !running && (
+          <span className="out-hint">Вывод программы появится здесь.</span>
+        )}
+        {lines.map((line, index) => (
+          <span key={index} className={line.stream === "stderr" ? "out-err" : ""}>
+            {line.text}
+            {"\n"}
+          </span>
+        ))}
+      </pre>
     </section>
   );
 }

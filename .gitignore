@@ -1,4 +1,20 @@
+# Фронтенд
 frontend/node_modules/
-frontend/public/
-frontend/.src/
+frontend/dist/
+# копируется из npm-пакета скриптом prebuild
+frontend/public/pyodide/
+
+# Бэкенд
 backend/target/
+# сюда копируется собранный фронтенд
+backend/src/main/resources/static/
+
+# Агент
+agent/execool-agent
+agent/execool-agent.exe
+
+# Локальное
+.env
+*.log
+.idea/
+.vscode/

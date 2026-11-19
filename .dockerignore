@@ -1,0 +1,10 @@
+# Образы собираются из корня репозитория (docker/*.Dockerfile),
+# поэтому здесь исключено только то, что собирается внутри образа заново.
+.git
+**/node_modules
+**/target
+**/dist
+**/.idea
+**/.vscode
+frontend/public
+backend/src/main/resources/static
