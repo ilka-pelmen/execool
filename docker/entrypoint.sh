@@ -20,14 +20,14 @@ execool-agent &
 pids+=($!)
 
 # Память делится между процессами, поэтому Java получает меньше, чем в отдельном образе.
-java -XX:ActiveProcessorCount=1 -XX:MaxRAMPercentage=50 -XX:+UseSerialGC -XX:TieredStopAtLevel=1 -jar /app/app.jar &
-java_pid=$!
-pids+=("$java_pid")
+execool &
+server_pid=$!
+pids+=("$server_pid")
 
 # Ждем, пока бэкенд откроется
 deadline=$((SECONDS + 180))
 until (exec 3<>/dev/tcp/127.0.0.1/6721) 2>/dev/null && curl -fs -o /dev/null http://127.0.0.1:6767/ping 2>/dev/null; do
-  if ! kill -0 "$java_pid" 2>/dev/null || [ "$SECONDS" -ge "$deadline" ]; then
+  if ! kill -0 "$server_pid" 2>/dev/null || [ "$SECONDS" -ge "$deadline" ]; then
     echo "backend не готов за отведённое время" >&2
     stop_all
     exit 1

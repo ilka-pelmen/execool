@@ -10,7 +10,7 @@
 # https://ide.example.com/agent. Страница и агент оказываются на одном адресе, CORS не нужен.
 ARG CADDY_VERSION=2
 
-# 1. Фронтенд
+# 1. Frontend
 FROM docker.io/library/node:22-slim AS frontend
 WORKDIR /app
 
@@ -21,28 +21,16 @@ COPY frontend/ ./
 RUN npm run build
 RUN test -f dist/pyodide/pyodide.mjs || { echo "В dist нет pyodide: проверьте scripts/copy-pyodide.mjs"; exit 1; }
 
-# 2. Бэкенд
-FROM docker.io/library/maven:3.9-eclipse-temurin-17 AS backend
-WORKDIR /app
+# 2. Backend
+FROM docker.io/library/golang:1.26-alpine AS backend
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+COPY --from=frontend /app/dist ./static
+RUN CGO_ENABLED=0 go build -tags deploy -trimpath -ldflags="-s -w" -o /out/execool .
 
-COPY backend/pom.xml ./
-RUN mvn -B -q dependency:go-offline
-
-COPY backend/src ./src
-COPY --from=frontend /app/dist ./src/main/resources/static
-RUN mvn -B -q -DskipTests package
-
-RUN set -eu; \
-    set -- $(find target -maxdepth 1 -type f -name '*.jar' \
-      ! -name '*-sources.jar' \
-      ! -name '*-javadoc.jar' \
-      ! -name '*-tests.jar'); \
-    [ "$#" -eq 1 ] || { echo "Ожидался один JAR приложения, найдено: $#"; exit 1; }; \
-    mkdir -p /out; \
-    cp "$1" /out/app.jar
-
-# 3. Агент
-FROM docker.io/library/golang:1.23-alpine AS agent
+# 3. Agent
+FROM docker.io/library/golang:1.26-alpine AS agent
 WORKDIR /src
 COPY agent/go.mod agent/go.sum ./
 RUN go mod download
@@ -56,30 +44,25 @@ RUN test -n "$PYREFLY_VERSION" || { echo "Укажите --build-arg PYREFLY_VER
 RUN python -m venv /opt/pyrefly \
  && /opt/pyrefly/bin/pip install --no-cache-dir "pyrefly==${PYREFLY_VERSION}"
 
-# 5. Прокси
+# 5. Proxy
 FROM docker.io/library/caddy:${CADDY_VERSION} AS caddy
 
-# 6. Java (OpenJ9)
-FROM docker.io/library/ibm-semeru-runtimes:open-17-jre-noble AS java
-
-# 7. Запуск: образ с Python (нужен окружению Pyrefly) плюс Java для бэкенда
+# 6. Deploy
 FROM docker.io/library/python:3.13-slim
 RUN useradd --system --create-home --home-dir /home/execool execool
 RUN apt-get update \
     && apt-get install -y --no-install-recommends curl \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=java /opt/java/openjdk /opt/java/openjdk
 COPY --from=pyrefly /opt/pyrefly /opt/pyrefly
 COPY --from=agent /out/execool-agent /usr/local/bin/execool-agent
 COPY --from=caddy /usr/bin/caddy /usr/local/bin/caddy
-COPY --from=backend --chown=execool:execool /out/app.jar /app/app.jar
+COPY --from=backend --chown=execool:execool /out/execool /usr/local/bin/execool
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 COPY docker/entrypoint.sh /usr/local/bin/execool-entrypoint
 RUN sed -i 's/\r$//' /usr/local/bin/execool-entrypoint && chmod 0755 /usr/local/bin/execool-entrypoint
 
-ENV JAVA_HOME=/opt/java/openjdk \
-    PATH="/opt/java/openjdk/bin:/opt/pyrefly/bin:${PATH}" \
+ENV PATH="/opt/pyrefly/bin:${PATH}" \
     PROXY_PORT=8080 \
     SERVER_PORT=6767 \
     AGENT_PORT=6721 \
@@ -90,7 +73,7 @@ ENV JAVA_HOME=/opt/java/openjdk \
 USER execool
 EXPOSE 8080
 
-# Проверяем весь путь через прокси: фронтенд и агент.
+# Checking the route
 HEALTHCHECK --interval=10s --timeout=5s --start-period=40s --retries=6 \
   CMD python -c "import urllib.request as u; u.urlopen('http://127.0.0.1:8080/', timeout=3); u.urlopen('http://127.0.0.1:8080/agent/ping', timeout=3)"
 

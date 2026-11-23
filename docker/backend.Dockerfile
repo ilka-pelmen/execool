@@ -15,35 +15,22 @@ RUN npm run build
 # Без Pyodide в сборке приложение откроется, но Python не запустится.
 RUN test -f dist/pyodide/pyodide.mjs || { echo "В dist нет pyodide: проверьте scripts/copy-pyodide.mjs"; exit 1; }
 
-# 2. Бэкенд: собранный фронтенд кладём в статические ресурсы Spring
-FROM docker.io/library/maven:3.9-eclipse-temurin-17 AS build
-WORKDIR /app
-
-COPY backend/pom.xml ./
-RUN mvn -B -q dependency:go-offline
-
-COPY backend/src ./src
-COPY --from=frontend /app/dist ./src/main/resources/static
-RUN mvn -B -q -DskipTests package
-
-RUN set -eu; \
-    set -- $(find target -maxdepth 1 -type f -name '*.jar' \
-      ! -name '*-sources.jar' \
-      ! -name '*-javadoc.jar' \
-      ! -name '*-tests.jar'); \
-    [ "$#" -eq 1 ] || { echo "Ожидался один JAR приложения, найдено: $#"; exit 1; }; \
-    mkdir -p /out; \
-    cp "$1" /out/app.jar
+# 2. Бэкенд
+FROM docker.io/library/golang:1.26-alpine AS build
+COPY backend/go.mod backend/go.sum ./
+RUN go mod download
+COPY backend/ ./
+COPY --from=frontend /app/dist ./static
+RUN CGO_ENABLED=0 go build -tags deploy -trimpath -ldflags="-s -w" -o /out/execool .
 
 # 3. Запуск
-FROM docker.io/library/ibm-semeru-runtimes:open-17-jre-noble
+FROM docker.io/library/alpine:latest
 RUN groupadd --system app && useradd --system --gid app --home-dir /app app
 WORKDIR /app
-
-COPY --from=build --chown=app:app /out/app.jar /app/app.jar
+COPY --from=build /out/execool /usr/local/bin/execool
 
 ENV SERVER_PORT=6767
 
 USER app
 EXPOSE 6767
-ENTRYPOINT ["java", "-XX:MaxRAMPercentage=75", "-jar", "/app/app.jar"]
+ENTRYPOINT ["/usr/local/bin/execool"]

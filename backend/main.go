@@ -28,7 +28,12 @@ func main() {
 	router.GET("/ping", func(c *gin.Context) {
 		c.String(http.StatusOK, "pong")
 	})
-	staticResourceConfig(router)
+
+	err := staticResourceConfig(router)
+	if err != nil {
+		log.Fatalf("create session controller: %v", err)
+		return
+	}
 
 	sc, err := NewSessionController(config)
 	if err != nil {
