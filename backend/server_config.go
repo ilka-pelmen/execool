@@ -3,7 +3,9 @@
 package main
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -21,6 +23,11 @@ func init() {
 
 func staticResourceConfig(g *gin.Engine) error {
 	webRoot, err := fs.Sub(staticFiles, "static")
+	if err != nil {
+		return err
+	}
+
+	etags, err := buildETags(webRoot)
 	if err != nil {
 		return err
 	}
@@ -48,13 +55,40 @@ func staticResourceConfig(g *gin.Engine) error {
 			c.Status(http.StatusNotFound)
 			return
 		}
+
+		etag := etags[name]
+		c.Header("ETag", etag)
 		if strings.HasPrefix(name, "assets/") {
 			c.Header("Cache-Control", "public, max-age=604800, immutable")
 		} else {
 			c.Header("Cache-Control", "no-cache")
+			if c.GetHeader("If-None-Match") == etag {
+				c.Status(http.StatusNotModified)
+				return
+			}
 		}
 		c.FileFromFS(name, http.FS(webRoot))
 	})
 
 	return nil
+}
+
+func buildETags(fsys fs.FS) (map[string]string, error) {
+	etags := make(map[string]string)
+	err := fs.WalkDir(fsys, ".", func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		data, err := fs.ReadFile(fsys, p)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(data)
+		etags[p] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		return nil
+	})
+	return etags, err
 }
