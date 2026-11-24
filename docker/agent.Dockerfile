@@ -3,7 +3,7 @@
 #   docker build -f docker/agent.Dockerfile --build-arg PYREFLY_VERSION=<версия> -t execool-agent .
 
 # 1. Агент
-FROM docker.io/library/golang:1.23-alpine AS build
+FROM docker.io/library/golang:1.26-alpine AS build
 WORKDIR /src
 COPY agent/go.mod agent/go.sum ./
 RUN go mod download
