@@ -33,7 +33,7 @@ func main() {
 
 	err := staticResourceConfig(router)
 	if err != nil {
-		log.Fatalf("create session controller: %v", err)
+		log.Fatalf("configure static resource: %v", err)
 		return
 	}
 

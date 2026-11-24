@@ -11,7 +11,19 @@ const isolationHeaders = {
 };
 
 export default defineConfig({
-  plugins: [preact()],
+  plugins: [
+    preact(),
+    {
+      name: "cross-origin-isolation",
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          for (const [k, v] of Object.entries(isolationHeaders))
+            res.setHeader(k, v);
+          next();
+        });
+      },
+    },
+  ],
   resolve: {
     alias: [
       {
@@ -36,7 +48,6 @@ export default defineConfig({
     headers: isolationHeaders,
   },
   server: {
-    headers: isolationHeaders,
     proxy: {
       "/api": {
         target: "http://localhost:6767",
