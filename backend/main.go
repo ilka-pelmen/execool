@@ -24,12 +24,6 @@ func main() {
 		MaxAge:           12 * time.Hour,
 	})
 
-	router.Use(func(c *gin.Context) {
-		c.Header("Cross-Origin-Opener-Policy", "same-origin")
-		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
-		c.Next()
-	})
-
 	apiGroup := router.Group("/api")
 	apiGroup.Use(corsHandler)
 

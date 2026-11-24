@@ -40,6 +40,8 @@ func staticResourceConfig(g *gin.Engine) error {
 	// index.html is revalidated on every load, like the Spring setup
 	g.GET("/", func(c *gin.Context) {
 		c.Header("Cache-Control", "no-cache")
+		c.Header("Cross-Origin-Opener-Policy", "same-origin")
+		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
 		c.Data(http.StatusOK, "text/html; charset=utf-8", indexHTML)
 	})
 
