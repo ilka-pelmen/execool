@@ -50,3 +50,18 @@ export function pickRunTarget(files, activePath) {
   }
   return null;
 }
+
+/** "myapp" -> "myapp 2", если имя занято. */
+export function uniqueName(base, takenNames) {
+  const taken = new Set(takenNames);
+  if (!taken.has(base)) return base;
+  for (let n = 2; ; n++) {
+    const candidate = `${base} ${n}`;
+    if (!taken.has(candidate)) return candidate;
+  }
+}
+
+/** Имя для скачиваемого файла: без символов, запрещённых в Windows. */
+export function safeFileName(name) {
+  return String(name).replace(/[\\/:*?"<>|\u0000-\u001f]+/g, "_").trim() || "project";
+}

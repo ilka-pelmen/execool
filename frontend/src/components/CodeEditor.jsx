@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "preact/hooks";
 
 import { basicSetup } from "codemirror";
-import { Annotation, Compartment, EditorState } from "@codemirror/state";
+import { Annotation, Compartment, EditorState, Prec, Transaction } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import { indentMore, indentLess } from "@codemirror/commands"; // Добавили отступы
 import { defaultHighlightStyle, foldGutter, syntaxHighlighting } from "@codemirror/language";
@@ -12,6 +12,9 @@ import { oneDarkHighlightStyle } from "@codemirror/theme-one-dark";
 import { acceptCompletion, completionStatus } from "@codemirror/autocomplete";
 
 import { python } from "@codemirror/lang-python";
+
+import { useZoom } from "../services/useZoom.js";
+import ZoomBadge from "./ZoomBadge.jsx";
 
 // Языки по расширению файла...
 const LANGUAGES = {
@@ -30,12 +33,12 @@ const editorTheme = (light) => EditorView.theme(
       height: "100%",
       backgroundColor: "var(--editor-bg)",
       color: "var(--text)",
-      fontSize: "15px",
+      fontSize: "var(--editor-font-size, 14px)",
     },
     "&.cm-focused": { outline: "none" },
     ".cm-scroller": {
       fontFamily: 'var(--mono, "JetBrains Mono", Consolas, monospace)',
-      lineHeight: "20px",
+      lineHeight: "1.55",
     },
     ".cm-content": { 
       padding: "0", 
@@ -51,7 +54,7 @@ const editorTheme = (light) => EditorView.theme(
     },
     ".cm-gutter-lint": { width: "0.1em" },
     ".cm-line": {
-      padding: "2 2",
+      padding: "0 6px",
     },
     
     /* Делаем активную строку полупрозрачной, чтобы выделение под ней было видно */
@@ -144,6 +147,8 @@ export default function CodeEditor({
   value,
   onChange,
   readOnly = false,
+  onRun,
+  onSave,
   issues, // диагностика не от LSP; при включённых подсказках не передавать
   lspClient = null,
   lspRootUri = null,
@@ -155,8 +160,13 @@ export default function CodeEditor({
   const onChangeRef = useRef(onChange);
   const lspRef = useRef({ client: lspClient, rootUri: lspRootUri });
   const appliedClientRef = useRef(null); // клиент, с которым собрано текущее состояние редактора
+  const onRunRef = useRef(onRun);
+  const onSaveRef = useRef(onSave);
+  const zoom = useZoom("editor", { base: 14, min: 8, max: 48 });
 
   onChangeRef.current = onChange;
+  onRunRef.current = onRun;
+  onSaveRef.current = onSave;
   lspRef.current = { client: lspClient, rootUri: lspRootUri };
 
   function createState(path, doc) {
@@ -166,6 +176,27 @@ export default function CodeEditor({
     return EditorState.create({
       doc,
       extensions: [
+        // Выше стандартной раскладки: Ctrl+Enter в редакторе по умолчанию вставляет строку.
+        Prec.highest(
+          keymap.of([
+            {
+              key: "Mod-Enter",
+              preventDefault: true,
+              run: () => {
+                onRunRef.current?.();
+                return true;
+              },
+            },
+            {
+              key: "Mod-s",
+              preventDefault: true,
+              run: () => {
+                onSaveRef.current?.();
+                return true;
+              },
+            },
+          ])
+        ),
         basicSetup,
         keymap.of([
           {
@@ -237,6 +268,24 @@ export default function CodeEditor({
   }, [readOnly]);
 
   useEffect(() => {
+  const view = viewRef.current;
+  if (!view) return;
+
+  view.requestMeasure();
+
+  // Временная вставка и удаление пробела: документ меняется, гаттер пересчитывается.
+  // externalChange не даёт вызвать onChange, addToHistory(false) не добавляет шаги в undo.
+  view.dispatch({
+    changes: { from: 0, insert: " " },
+    annotations: [externalChange.of(true), Transaction.addToHistory.of(false)],
+  });
+  view.dispatch({
+    changes: { from: 0, to: 1 },
+    annotations: [externalChange.of(true), Transaction.addToHistory.of(false)],
+  });
+}, [zoom.size]);
+
+  useEffect(() => {
     viewRef.current?.dispatch({
       effects: themeCompartment.reconfigure([
         editorTheme(theme === "light"),
@@ -271,29 +320,14 @@ export default function CodeEditor({
     );
   }, [issues, filePath]);
 
-  const slash = filePath.lastIndexOf("/");
-
   return (
-    <div className="editor-panel">
-      <div className="editor-tab">
-        <span>
-          {slash !== -1 && (
-            <span className="file-dir">{filePath.slice(0, slash + 1)}</span>
-          )}
-          {filePath.slice(slash + 1)}
-        </span>
-        {readOnly && (
-          <span className="editor-tab-label">
-            Открой проект, чтобы редактировать
-          </span>
-        )}
-      </div>
-
-      <div
-        className="editor-host"
-        style={{ flex: 1, minHeight: 0 }}
-        ref={hostRef}
-      />
+    <div
+      className="editor-panel"
+      ref={zoom.ref}
+      style={{ "--editor-font-size": `${zoom.size}px` }}
+    >
+      <div className="editor-host" ref={hostRef} />
+      <ZoomBadge zoom={zoom} />
     </div>
   );
 }

@@ -1,22 +1,70 @@
 // Общее ядро воркера для любого рантайма (Pyodide, wasm-программы на C++ и т. д.).
 // Рантайм подключается адаптером:
 //   adapter.name                  имя для сообщений об ошибках ("Python", "C++")
-//   adapter.load(io)              загружает рантайм, подключает вывод к io.stdout / io.stderr,
-//                                 возвращает экземпляр рантайма
+//   adapter.load(io)              загружает рантайм, подключает вывод к io.stdout / io.stderr
+//                                 и ввод к io.stdin, возвращает экземпляр рантайма
 //   adapter.run(instance, job)    выполняет проект job = { entry, files }, возвращает код выхода
 //                                 (можно вернуть значение или промис)
+//
+// io.stdin() блокирует воркер, пока пользователь не введёт строку в терминале.
+// Возвращает строку (без перевода строки) или null, если ввод закрыт / недоступен.
+// io.getInterrupt() даёт байт для прерывания выполнения (или null).
+
+import { EOF, LENGTH, STATE, openChannel } from "./inputChannel.js";
 
 function errorText(error) {
   return error?.message ?? String(error);
 }
 
+const NO_INPUT_MESSAGE =
+  "[Ввод недоступен: страница открыта без cross-origin isolation. " +
+  "Нужны заголовки COOP/COEP, см. vite.config.js]\n";
+
 export function createWorkerCore({ adapter, post }) {
   let instancePromise = null;
+  let channel = null;
+  let warnedNoInput = false;
+  const decoder = new TextDecoder();
+
+  function readLine() {
+    if (!channel) {
+      if (!warnedNoInput) {
+        warnedNoInput = true;
+        post({ type: "output", stream: "stderr", text: NO_INPUT_MESSAGE });
+      }
+      return null;
+    }
+
+    const { control, data } = channel;
+    Atomics.store(control, STATE, 0);
+    post({ type: "input-request" });
+
+    // Ждём данные (1), прерывание (2) или закрытие ввода. Значение 0 - ещё ждём.
+    while (Atomics.load(control, STATE) === 0) {
+      Atomics.wait(control, STATE, 0);
+    }
+
+    // Прерывание: возвращаем пустую строку, KeyboardInterrupt поднимет интерпретатор
+    if (Atomics.load(control, STATE) === 2) return "";
+
+    if (Atomics.load(control, EOF) === 1) return null;
+
+    const length = Atomics.load(control, LENGTH);
+    return decoder.decode(data.slice(0, length));
+  }
 
   const io = {
     stdout: (text) => post({ type: "output", stream: "stdout", text }),
     stderr: (text) => post({ type: "output", stream: "stderr", text }),
+    stdin: readLine,
+    getInterrupt: () => channel?.interrupt ?? null,
   };
+
+  function attachChannel(message) {
+    if (message.channel && !channel) {
+      channel = openChannel(message.channel);
+    }
+  }
 
   function init() {
     if (!instancePromise) {
@@ -39,6 +87,8 @@ export function createWorkerCore({ adapter, post }) {
   }
 
   async function handle(message) {
+    attachChannel(message);
+
     if (message.type === "init") {
       try {
         await init();
@@ -55,6 +105,7 @@ export function createWorkerCore({ adapter, post }) {
 
     try {
       const instance = await init();
+      warnedNoInput = false;
       post({ type: "status", status: "running" });
 
       const exitCode = await adapter.run(instance, {

@@ -16,7 +16,7 @@ _BASELINE_MODULES = set(sys.modules)
 
 
 def _is_project_path(path, project_dir):
-    return bool(path) and os.path.abspath(path).startswith(project_dir + os.sep)
+    return bool(path) and path.startswith(project_dir + os.sep)
 
 
 def _write_project(project_dir, files):
@@ -65,6 +65,13 @@ def _format_error(exc, project_dir):
 
 def execool_run(entry, files_json, project_dir=PROJECT_DIR):
     """Записывает файлы проекта, запускает entry как __main__, возвращает код выхода."""
+    # Вывод должен доезжать до терминала сразу после каждой строки.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except Exception:
+            pass
+
     files = json.loads(files_json)
     exit_code = 0
     old_cwd = os.getcwd()
