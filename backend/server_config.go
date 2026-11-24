@@ -22,12 +22,6 @@ func init() {
 }
 
 func staticResourceConfig(g *gin.Engine) error {
-	coopHandler := func(c *gin.Context) {
-		c.Header("Cross-Origin-Opener-Policy", "same-origin")
-		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
-		c.Next()
-	}
-
 	webRoot, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		return err
@@ -44,7 +38,7 @@ func staticResourceConfig(g *gin.Engine) error {
 	}
 
 	// index.html is revalidated on every load, like the Spring setup
-	g.GET("/", coopHandler, func(c *gin.Context) {
+	g.GET("/", func(c *gin.Context) {
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Cross-Origin-Opener-Policy", "same-origin")
 		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
@@ -67,8 +61,12 @@ func staticResourceConfig(g *gin.Engine) error {
 		etag := etags[name]
 		c.Header("ETag", etag)
 		if strings.HasPrefix(name, "assets/") {
+			c.Header("Cross-Origin-Opener-Policy", "same-origin")
+			c.Header("Cross-Origin-Embedder-Policy", "require-corp")
 			c.Header("Cache-Control", "public, max-age=604800, immutable")
 		} else {
+			c.Header("Cross-Origin-Opener-Policy", "same-origin")
+			c.Header("Cross-Origin-Embedder-Policy", "require-corp")
 			c.Header("Cache-Control", "no-cache")
 			if c.GetHeader("If-None-Match") == etag {
 				c.Status(http.StatusNotModified)
