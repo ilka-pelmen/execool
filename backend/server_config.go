@@ -46,7 +46,7 @@ func staticResourceConfig(g *gin.Engine) error {
 	})
 
 	// Files under assets/ are hashed and cached for a week; the rest is revalidated.
-	g.NoRoute(coopHandler, func(c *gin.Context) {
+	g.NoRoute(func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 			c.Status(http.StatusNotFound)
 			return
