@@ -22,12 +22,6 @@ func init() {
 }
 
 func staticResourceConfig(g *gin.Engine) error {
-	g.Use(func(c *gin.Context) {
-		c.Header("Cross-Origin-Opener-Policy", "same-origin")
-		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
-		c.Next()
-	})
-
 	webRoot, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		return err

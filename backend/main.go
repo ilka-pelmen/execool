@@ -16,16 +16,24 @@ func main() {
 	router.Use(gin.Logger())
 	router.Use(gin.Recovery())
 
-	apiGroup := router.Group("/api")
-	apiGroup.Use(cors.New(cors.Config{
+	corsHandler := cors.New(cors.Config{
 		AllowOrigins:     config.AllowedOrigins,
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE"},
-		AllowHeaders:     []string{"*"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		AllowCredentials: true,
 		MaxAge:           12 * time.Hour,
-	}))
+	})
 
-	router.GET("/ping", func(c *gin.Context) {
+	router.Use(func(c *gin.Context) {
+		c.Header("Cross-Origin-Opener-Policy", "same-origin")
+		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
+		c.Next()
+	})
+
+	apiGroup := router.Group("/api")
+	apiGroup.Use(corsHandler)
+
+	router.GET("/ping", corsHandler, func(c *gin.Context) {
 		c.String(http.StatusOK, "pong")
 	})
 
