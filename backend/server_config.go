@@ -22,6 +22,12 @@ func init() {
 }
 
 func staticResourceConfig(g *gin.Engine) error {
+	coopHandler := func(c *gin.Context) {
+		c.Header("Cross-Origin-Opener-Policy", "same-origin")
+		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
+		c.Next()
+	}
+
 	webRoot, err := fs.Sub(staticFiles, "static")
 	if err != nil {
 		return err
@@ -38,7 +44,7 @@ func staticResourceConfig(g *gin.Engine) error {
 	}
 
 	// index.html is revalidated on every load, like the Spring setup
-	g.GET("/", func(c *gin.Context) {
+	g.GET("/", coopHandler, func(c *gin.Context) {
 		c.Header("Cache-Control", "no-cache")
 		c.Header("Cross-Origin-Opener-Policy", "same-origin")
 		c.Header("Cross-Origin-Embedder-Policy", "require-corp")
@@ -46,7 +52,7 @@ func staticResourceConfig(g *gin.Engine) error {
 	})
 
 	// Files under assets/ are hashed and cached for a week; the rest is revalidated.
-	g.NoRoute(func(c *gin.Context) {
+	g.NoRoute(coopHandler, func(c *gin.Context) {
 		if c.Request.Method != http.MethodGet && c.Request.Method != http.MethodHead {
 			c.Status(http.StatusNotFound)
 			return
